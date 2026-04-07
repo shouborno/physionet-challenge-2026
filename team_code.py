@@ -2,14 +2,14 @@
 """
 PhysioNet Challenge 2026: Screening for Cognitive Impairment During Sleep Studies.
 
-4-model probability average ensemble (v5):
-  Model 1: 17-feature LR (optimized for site I0002)
-  Model 2: 28-feature LR (optimized for site I0006)
-  Model 3: 28-feature LR (optimized for site S0001)
-  Model 4: 28-feature LR (optimized for mean AUROC)
-  P(CI) = mean of 4 model probabilities (equal weight)
+Single L2-regularized logistic regression model (28 features) selected via
+greedy forward search optimizing worst-site LOSO AUROC, with a domain-adversarial
+feature stability filter to remove site-confounded and sign-inconsistent features.
 
-LOSO CV: Mean AUROC ~0.772, worst-site ~0.632
+Features span CAISR annotations, sleep architecture transitions, HRV, EEG spectral
+power, slow-wave morphology, spindle density, and nonlinear complexity measures.
+
+LOSO CV: Mean AUROC ~0.780, worst-site ~0.672
 """
 
 import joblib
@@ -27,61 +27,21 @@ DEFAULT_CSV_PATH = os.path.join(SCRIPT_DIR, 'channel_table.csv')
 _trapz = np.trapezoid if hasattr(np, 'trapezoid') else np.trapz
 
 # ============================================================
-# Feature Lists & Hyperparameters (v5, 4-model ensemble)
+# Feature List & Hyperparameters
 # ============================================================
 
-MODEL_I0002_FEATURES = [
+SELECTED_FEATURES = [
     'caisr_prob_arous_std', 'stage_prob_entropy_std', 'arousal_index',
-    'hrv_sdnn_rem', 'eeg_rem_rel_theta', 'trans_R_R', 'eeg_overall_mobility',
-    'eeg_rem_rel_alpha', 'caisr_prob_w_min', 'ahi_auto', 'arousal_duration_mean',
-    'dfa_n3', 'sex_female', 'caisr_prob_arous_max', 'race_unavail',
-    'stationary_dist_divergence', 'n_sleep_cycles',
-]
-
-MODEL_I0006_FEATURES = [
-    'caisr_prob_arous_std', 'stage_prob_entropy_std', 'arousal_index',
-    'eeg_wake_rel_beta', 'eeg_n1_rel_theta', 'hrv_pnn50', 'sw_slope_mean_n3',
-    'kcomplex_density_n2', 'dtabr_n2', 'trans_R_W', 'total_recording_min',
-    'theta_alpha_ratio_overall', 'bout_std_W', 'caisr_prob_r_std',
-    'n3_first_vs_second_half', 'hrv_lf_hf_ratio', 'trans_N2_N3',
-    'eeg_n3_rel_delta', 'trans_N3_N3', 'eeg_n3_mobility', 'trans_N3_W',
-    'arousal_duration_std', 'sample_entropy_rem', 'stationary_dist_divergence',
-    'eeg_n3_rel_sigma', 'pct_rem', 'petrosian_fd_n2', 'bout_std_R',
-]
-
-MODEL_S0001_FEATURES = [
-    'caisr_prob_arous_std', 'stage_prob_entropy_std', 'arousal_index',
-    'sw_slope_mean_n3', 'hrv_rmssd_rem', 'eeg_rem_activity', 'hrv_lf_hf_ratio',
-    'race_unavail', 'caisr_prob_n2_max', 'total_recording_min',
-    'sw_frequency_mean_n2', 'eeg_rem_rel_theta', 'hrv_sample_entropy',
-    'eeg_n3_rel_theta', 'spindle_density_n3', 'dfa_wake',
-    'caisr_prob_arous_min', 'eeg_n3_activity', 'n_awakenings',
-    'sw_frequency_mean_n3', 'arousal_nrem_pct', 'trans_R_W', 'trans_N3_W',
-    'eeg_wake_rel_beta', 'trans_R_N2', 'eeg_n2_rel_theta', 'petrosian_fd_n2',
-    'dfa_n3',
-]
-
-MODEL_MEAN_FEATURES = [
-    'caisr_prob_arous_std', 'stage_prob_entropy_std', 'arousal_index',
-    'hrv_sdnn_rem', 'sw_slope_mean_n3', 'trans_R_R', 'spindle_density_n2',
-    'stationary_dist_divergence', 'race_unavail', 'trans_R_N2', 'trans_R_W',
-    'eeg_rem_activity', 'sample_entropy_rem', 'n3_first_vs_second_half',
-    'hrv_lf_hf_ratio', 'total_recording_min', 'spo2_min',
-    'eeg_n3_rel_sigma', 'eeg_rem_complexity', 'eeg_n3_kurtosis',
-    'eeg_n3_activity', 'caisr_prob_n1_min', 'spectral_edge_95_n2',
-    'higuchi_fd_n2', 'n_sleep_cycles', 'age', 'spo2_pct_below88',
-    'eeg_n3_rel_beta',
-]
-
-ALL_MODEL_FEATURES = [
-    ('model_i0002', MODEL_I0002_FEATURES),
-    ('model_i0006', MODEL_I0006_FEATURES),
-    ('model_s0001', MODEL_S0001_FEATURES),
-    ('model_mean', MODEL_MEAN_FEATURES),
+    'sw_slope_mean_n3', 'hrv_rmssd_rem', 'race_unavail', 'hrv_lf_hf_ratio',
+    'caisr_prob_n2_max', 'rem_theta_alpha_ratio', 'hrv_sample_entropy',
+    'eeg_n3_rel_theta', 'dfa_wake', 'sw_frequency_mean_n2', 'spindle_density_n3',
+    'eeg_n3_activity', 'trans_R_W', 'arousal_nrem_pct', 'sw_negpeak_ptp_ratio_n3',
+    'trans_N3_W', 'eeg_rem_rel_alpha', 'stage_prob_entropy_mean',
+    'sw_duration_mean_n3', 'spo2_odi', 'trans_persistence_mean', 'eeg_n3_kurtosis',
+    'trans_N2_N3', 'eeg_wake_rel_beta', 'eeg_overall_rel_alpha',
 ]
 
 MODEL_C = 0.005
-N_MODELS = 4
 
 EEG_CANDIDATES = ['c3-m2', 'c4-m1', 'f3-m2', 'f4-m1', 'o1-m2', 'o2-m1']
 
@@ -280,10 +240,28 @@ def extract_caisr_features(algo_data):
             norm_probs = np.clip(valid_probs / row_sums, 1e-10, 1.0)
             entropy = -np.sum(norm_probs * np.log2(norm_probs), axis=1)
             feat['stage_prob_entropy_std'] = float(np.std(entropy))
+            feat['stage_prob_entropy_mean'] = float(np.mean(entropy))
         else:
             feat['stage_prob_entropy_std'] = np.nan
+            feat['stage_prob_entropy_mean'] = np.nan
     else:
         feat['stage_prob_entropy_std'] = np.nan
+        feat['stage_prob_entropy_mean'] = np.nan
+
+    # Transition persistence: mean of diagonal (tendency to stay in same stage)
+    if total_epochs > 0:
+        stage_map = {5: 0, 3: 1, 2: 2, 1: 3, 4: 4}
+        mapped = np.array([stage_map.get(int(s), -1) for s in valid_stages])
+        valid_trans = mapped[mapped >= 0]
+        trans_matrix = np.zeros((5, 5))
+        for i in range(len(valid_trans) - 1):
+            trans_matrix[valid_trans[i], valid_trans[i + 1]] += 1
+        row_sums_t = trans_matrix.sum(axis=1, keepdims=True)
+        row_sums_t[row_sums_t == 0] = 1
+        trans_prob_t = trans_matrix / row_sums_t
+        feat['trans_persistence_mean'] = float(np.mean(np.diag(trans_prob_t)))
+    else:
+        feat['trans_persistence_mean'] = np.nan
 
     return feat
 
@@ -456,13 +434,16 @@ def extract_spo2_features(channels, fs_dict):
     """Extract SpO2 features: mean, min, std, pct_below90, pct_below88."""
     feat = OrderedDict()
     spo2_sig = None
+    spo2_fs = None
     for ch in ['spo2', 'sao2']:
         if ch in channels and channels[ch] is not None:
             spo2_sig = channels[ch].astype(float)
+            spo2_fs = fs_dict.get(ch, 1.0)
             break
     if spo2_sig is None or len(spo2_sig) == 0:
         feat['spo2_min'] = np.nan
         feat['spo2_pct_below88'] = np.nan
+        feat['spo2_odi'] = np.nan
         return feat
 
     if np.nanmax(spo2_sig) <= 1.5:
@@ -475,6 +456,20 @@ def extract_spo2_features(channels, fs_dict):
     else:
         feat['spo2_min'] = float(np.min(valid))
         feat['spo2_pct_below88'] = float(np.mean(valid < 88))
+
+    # ODI: desaturation events (>=3% drop from rolling baseline) per hour
+    feat['spo2_odi'] = np.nan
+    total_hours = len(spo2_sig) / spo2_fs / 3600.0
+    if total_hours > 0 and spo2_fs > 0:
+        window = int(120 * spo2_fs)  # 2-minute baseline
+        if window > 0 and len(spo2_sig) > window:
+            from scipy.ndimage import maximum_filter1d
+            baseline = maximum_filter1d(spo2_sig, size=window)
+            drops = baseline - spo2_sig
+            desat_mask = (drops >= 3).astype(int)
+            desat_starts = np.sum(np.diff(desat_mask, prepend=0) == 1)
+            feat['spo2_odi'] = float(desat_starts / total_hours)
+
     return feat
 
 
@@ -584,8 +579,9 @@ def extract_eeg_spectral_features(eeg_sig, eeg_fs, stage_segments):
 
     if eeg_sig is None or eeg_fs is None or eeg_fs <= 0:
         nan_feats = [
-            'eeg_overall_mobility',
+            'eeg_overall_mobility', 'eeg_overall_rel_alpha',
             'eeg_rem_rel_theta', 'eeg_rem_rel_alpha', 'eeg_rem_activity', 'eeg_rem_complexity',
+            'rem_theta_alpha_ratio',
             'eeg_wake_rel_beta',
             'eeg_n1_rel_theta',
             'eeg_n2_rel_theta', 'eeg_n2_kurtosis',
@@ -632,8 +628,9 @@ def extract_eeg_spectral_features(eeg_sig, eeg_fs, stage_segments):
         complexity = float(mob_d1 / mobility) if mobility > 0 else 0.0
         return activity, mobility, complexity
 
-    # Overall mobility
+    # Overall mobility and alpha power
     _, feat['eeg_overall_mobility'], _ = _hjorth(eeg_sig)
+    feat['eeg_overall_rel_alpha'] = _bandpower(eeg_sig, eeg_fs, 8.0, 13.0)
 
     # REM features
     rem_eeg = stage_segments.get('rem', np.array([]))
@@ -641,9 +638,15 @@ def extract_eeg_spectral_features(eeg_sig, eeg_fs, stage_segments):
     if freqs is not None:
         feat['eeg_rem_rel_theta'] = _rel_power(freqs, psd, 4.0, 8.0)
         feat['eeg_rem_rel_alpha'] = _rel_power(freqs, psd, 8.0, 13.0)
+        # REM theta/alpha ratio — EEG slowing marker for MCI
+        if not np.isnan(feat['eeg_rem_rel_alpha']) and feat['eeg_rem_rel_alpha'] > 0:
+            feat['rem_theta_alpha_ratio'] = float(feat['eeg_rem_rel_theta'] / feat['eeg_rem_rel_alpha'])
+        else:
+            feat['rem_theta_alpha_ratio'] = np.nan
     else:
         feat['eeg_rem_rel_theta'] = np.nan
         feat['eeg_rem_rel_alpha'] = np.nan
+        feat['rem_theta_alpha_ratio'] = np.nan
     act, _, cplx = _hjorth(rem_eeg)
     feat['eeg_rem_activity'] = act
     feat['eeg_rem_complexity'] = cplx
@@ -726,7 +729,8 @@ def extract_nonlinear_features(eeg_sig, eeg_fs, stage_segments):
     nan_keys = [
         'dfa_n3', 'dfa_wake', 'sw_density_n2', 'so_count_n2',
         'so_spindle_coupling_n2', 'sw_slope_mean_n3', 'sw_frequency_mean_n2',
-        'sw_frequency_mean_n3', 'kcomplex_density_n2', 'spindle_density_n2',
+        'sw_frequency_mean_n3', 'sw_duration_mean_n3', 'sw_negpeak_ptp_ratio_n3',
+        'kcomplex_density_n2', 'spindle_density_n2',
         'spindle_density_n3', 'sample_entropy_rem', 'petrosian_fd_n2',
         'higuchi_fd_n2',
     ]
@@ -880,6 +884,8 @@ def extract_nonlinear_features(eeg_sig, eeg_fs, stage_segments):
     # N3 features
     feat['sw_slope_mean_n3'] = np.nan
     feat['sw_frequency_mean_n3'] = np.nan
+    feat['sw_duration_mean_n3'] = np.nan
+    feat['sw_negpeak_ptp_ratio_n3'] = np.nan
     feat['spindle_density_n3'] = np.nan
 
     n3_yasa, n3_dur_min = _yasa_prep(n3_eeg)
@@ -892,6 +898,12 @@ def extract_nonlinear_features(eeg_sig, eeg_fs, stage_segments):
             if sw_df is not None and len(sw_df) > 0:
                 feat['sw_slope_mean_n3'] = float(sw_df['Slope'].mean())
                 feat['sw_frequency_mean_n3'] = float(sw_df['Frequency'].mean())
+                feat['sw_duration_mean_n3'] = float(sw_df['Duration'].mean())
+                if 'ValNegPeak' in sw_df.columns:
+                    ptp_mean = sw_df['PTP'].mean()
+                    if ptp_mean > 0:
+                        feat['sw_negpeak_ptp_ratio_n3'] = float(
+                            sw_df['ValNegPeak'].mean() / ptp_mean)
 
             sp = yasa.spindles_detect(n3_yasa, sf=yasa_fs, verbose=False)
             sp_df = sp.summary() if sp is not None else None
@@ -971,7 +983,8 @@ def extract_all_features_for_record(patient_data, phys_channels, phys_fs,
                    'caisr_prob_w_min', 'caisr_prob_r_std', 'caisr_prob_arous_std',
                    'caisr_prob_arous_max', 'caisr_prob_arous_min',
                    'caisr_prob_n1_min', 'caisr_prob_n2_max',
-                   'stage_prob_entropy_std',
+                   'stage_prob_entropy_std', 'stage_prob_entropy_mean',
+                   'trans_persistence_mean',
                    'n_sleep_cycles', 'n3_first_vs_second_half',
                    'stationary_dist_divergence',
                    'arousal_duration_mean', 'arousal_duration_std', 'arousal_nrem_pct']:
@@ -1029,7 +1042,7 @@ def _load_record_signals(data_folder, site_id, patient_id, session_id):
 # ============================================================
 
 def train_model(data_folder, model_folder, verbose, csv_path=DEFAULT_CSV_PATH):
-    """Train 4-model ensemble on training data."""
+    """Train single LR model on training data."""
     from sklearn.preprocessing import StandardScaler
     from sklearn.linear_model import LogisticRegression
     from sklearn.impute import SimpleImputer
@@ -1088,42 +1101,38 @@ def train_model(data_folder, model_folder, verbose, csv_path=DEFAULT_CSV_PATH):
     if verbose:
         print(f'Training on {len(y)} records ({y.sum()} positive, {len(y)-y.sum()} negative)')
 
-    def _make_pipeline(C):
-        return Pipeline([
-            ('imputer', SimpleImputer(strategy='median')),
-            ('scaler', StandardScaler()),
-            ('lr', LogisticRegression(C=C, max_iter=1000, random_state=42, penalty='l2')),
-        ])
+    X = np.array([_feat_dict_to_vector(fd, SELECTED_FEATURES) for fd in feat_dicts])
+    X = _replace_inf(X)
 
-    models = {}
-    for name, feature_list in ALL_MODEL_FEATURES:
-        X = np.array([_feat_dict_to_vector(fd, feature_list) for fd in feat_dicts])
-        X = _replace_inf(X)
-        pipe = _make_pipeline(MODEL_C)
-        pipe.fit(X, y)
-        models[name] = pipe
+    pipe = Pipeline([
+        ('imputer', SimpleImputer(strategy='median')),
+        ('scaler', StandardScaler()),
+        ('lr', LogisticRegression(C=MODEL_C, max_iter=1000, random_state=42, penalty='l2')),
+    ])
+    pipe.fit(X, y)
 
-        if verbose:
-            print(f'{name}: {X.shape[1]} features')
-            coefs = pipe.named_steps['lr'].coef_[0]
-            for fname, c in sorted(zip(feature_list, coefs), key=lambda x: abs(x[1]), reverse=True)[:5]:
-                print(f'  {fname:35s} {c:+.4f}')
+    if verbose:
+        print(f'Model: {X.shape[1]} features')
+        coefs = pipe.named_steps['lr'].coef_[0]
+        for fname, c in sorted(zip(SELECTED_FEATURES, coefs),
+                                key=lambda x: abs(x[1]), reverse=True)[:10]:
+            print(f'  {fname:35s} {c:+.4f}')
 
     os.makedirs(model_folder, exist_ok=True)
-    save_model(model_folder, models)
+    save_model(model_folder, pipe)
 
     if verbose:
         print('Done training.')
 
 
 def load_model(model_folder, verbose):
-    """Load the trained 4-model ensemble."""
+    """Load the trained model."""
     filename = os.path.join(model_folder, 'model.sav')
     return joblib.load(filename)
 
 
 def run_model(model, record, data_folder, verbose):
-    """Run 4-model ensemble on a single record."""
+    """Run single LR model on a record."""
     patient_id = record[HEADERS['bids_folder']]
     site_id = record[HEADERS['site_id']]
     session_id = record[HEADERS['session_id']]
@@ -1137,14 +1146,9 @@ def run_model(model, record, data_folder, verbose):
     feat_dict = extract_all_features_for_record(
         patient_data, phys_channels, phys_fs, algo_data, DEFAULT_CSV_PATH)
 
-    probs = []
-    for name, feature_list in ALL_MODEL_FEATURES:
-        pipe = model['models'][name]
-        vec = _replace_inf(_feat_dict_to_vector(feat_dict, feature_list))
-        prob = float(pipe.predict_proba(vec.reshape(1, -1))[0, 1])
-        probs.append(prob)
-
-    probability_output = float(np.mean(probs))
+    pipe = model['pipeline']
+    vec = _replace_inf(_feat_dict_to_vector(feat_dict, SELECTED_FEATURES))
+    probability_output = float(pipe.predict_proba(vec.reshape(1, -1))[0, 1])
     binary_output = int(probability_output >= 0.5)
 
     return binary_output, probability_output
@@ -1154,12 +1158,11 @@ def run_model(model, record, data_folder, verbose):
 # Save Helper
 # ============================================================
 
-def save_model(model_folder, models):
-    """Save the 4-model ensemble."""
+def save_model(model_folder, pipeline):
+    """Save the trained model."""
     d = {
-        'models': models,
-        'feature_lists': {name: fl for name, fl in ALL_MODEL_FEATURES},
-        'n_models': N_MODELS,
+        'pipeline': pipeline,
+        'features': SELECTED_FEATURES,
     }
     filename = os.path.join(model_folder, 'model.sav')
     joblib.dump(d, filename, protocol=0)
