@@ -2,12 +2,14 @@
 """
 PhysioNet Challenge 2026: Screening for Cognitive Impairment During Sleep Studies.
 
-Dual-model probability average ensemble:
-  Model A: 31-feature LR (v3 greedy — maximizes overall AUROC)
-  Model B: 12-feature LR (min-site greedy — maximizes worst-case site AUROC)
-  P(CI) = alpha * P_A + (1-alpha) * P_B,  alpha = 0.6
+4-model probability average ensemble (v5):
+  Model 1: 17-feature LR (optimized for site I0002)
+  Model 2: 28-feature LR (optimized for site I0006)
+  Model 3: 28-feature LR (optimized for site S0001)
+  Model 4: 28-feature LR (optimized for mean AUROC)
+  P(CI) = mean of 4 model probabilities (equal weight)
 
-LOSO CV: Mean AUROC ~0.740, worst-site ~0.585
+LOSO CV: Mean AUROC ~0.772, worst-site ~0.632
 """
 
 import joblib
@@ -25,30 +27,61 @@ DEFAULT_CSV_PATH = os.path.join(SCRIPT_DIR, 'channel_table.csv')
 _trapz = np.trapezoid if hasattr(np, 'trapezoid') else np.trapz
 
 # ============================================================
-# Feature Lists & Hyperparameters
+# Feature Lists & Hyperparameters (v5, 4-model ensemble)
 # ============================================================
 
-MODEL_A_FEATURES = [
-    'pct_rem', 'pct_wake', 'sleep_efficiency', 'arousal_index', 'ahi_auto',
-    'n_awakenings', 'total_sleep_time_min', 'bout_mean_R', 'bout_std_R',
-    'caisr_prob_arous_std', 'stage_prob_entropy_std', 'hrv_rmssd',
-    'trans_R_W', 'trans_R_R', 'caisr_prob_r_std', 'eeg_n3_mobility',
-    'caisr_prob_w_min', 'age', 'spo2_pct_below90', 'sex_female',
-    'bout_std_W', 'eeg_n2_kurtosis', 'eeg_n3_kurtosis', 'spo2_std',
-    'bout_mean_W', 'so_count_n2', 'sw_density_n2', 'so_spindle_coupling_n2',
-    'spo2_mean', 'trans_W_N1', 'bout_mean_N3',
+MODEL_I0002_FEATURES = [
+    'caisr_prob_arous_std', 'stage_prob_entropy_std', 'arousal_index',
+    'hrv_sdnn_rem', 'eeg_rem_rel_theta', 'trans_R_R', 'eeg_overall_mobility',
+    'eeg_rem_rel_alpha', 'caisr_prob_w_min', 'ahi_auto', 'arousal_duration_mean',
+    'dfa_n3', 'sex_female', 'caisr_prob_arous_max', 'race_unavail',
+    'stationary_dist_divergence', 'n_sleep_cycles',
 ]
 
-MODEL_B_FEATURES = [
-    'caisr_prob_arous_std', 'hrv_pnn50', 'caisr_prob_n2_max',
-    'eeg_rem_activity', 'sw_density_n2', 'trans_R_W',
-    'so_spindle_coupling_n2', 'total_recording_min', 'caisr_prob_n1_max',
-    'trans_R_N2', 'eeg_n3_rel_delta', 'dfa_n3',
+MODEL_I0006_FEATURES = [
+    'caisr_prob_arous_std', 'stage_prob_entropy_std', 'arousal_index',
+    'eeg_wake_rel_beta', 'eeg_n1_rel_theta', 'hrv_pnn50', 'sw_slope_mean_n3',
+    'kcomplex_density_n2', 'dtabr_n2', 'trans_R_W', 'total_recording_min',
+    'theta_alpha_ratio_overall', 'bout_std_W', 'caisr_prob_r_std',
+    'n3_first_vs_second_half', 'hrv_lf_hf_ratio', 'trans_N2_N3',
+    'eeg_n3_rel_delta', 'trans_N3_N3', 'eeg_n3_mobility', 'trans_N3_W',
+    'arousal_duration_std', 'sample_entropy_rem', 'stationary_dist_divergence',
+    'eeg_n3_rel_sigma', 'pct_rem', 'petrosian_fd_n2', 'bout_std_R',
 ]
 
-ENSEMBLE_ALPHA = 0.6
-MODEL_A_C = 0.005
-MODEL_B_C = 0.005
+MODEL_S0001_FEATURES = [
+    'caisr_prob_arous_std', 'stage_prob_entropy_std', 'arousal_index',
+    'sw_slope_mean_n3', 'hrv_rmssd_rem', 'eeg_rem_activity', 'hrv_lf_hf_ratio',
+    'race_unavail', 'caisr_prob_n2_max', 'total_recording_min',
+    'sw_frequency_mean_n2', 'eeg_rem_rel_theta', 'hrv_sample_entropy',
+    'eeg_n3_rel_theta', 'spindle_density_n3', 'dfa_wake',
+    'caisr_prob_arous_min', 'eeg_n3_activity', 'n_awakenings',
+    'sw_frequency_mean_n3', 'arousal_nrem_pct', 'trans_R_W', 'trans_N3_W',
+    'eeg_wake_rel_beta', 'trans_R_N2', 'eeg_n2_rel_theta', 'petrosian_fd_n2',
+    'dfa_n3',
+]
+
+MODEL_MEAN_FEATURES = [
+    'caisr_prob_arous_std', 'stage_prob_entropy_std', 'arousal_index',
+    'hrv_sdnn_rem', 'sw_slope_mean_n3', 'trans_R_R', 'spindle_density_n2',
+    'stationary_dist_divergence', 'race_unavail', 'trans_R_N2', 'trans_R_W',
+    'eeg_rem_activity', 'sample_entropy_rem', 'n3_first_vs_second_half',
+    'hrv_lf_hf_ratio', 'total_recording_min', 'spo2_min',
+    'eeg_n3_rel_sigma', 'eeg_rem_complexity', 'eeg_n3_kurtosis',
+    'eeg_n3_activity', 'caisr_prob_n1_min', 'spectral_edge_95_n2',
+    'higuchi_fd_n2', 'n_sleep_cycles', 'age', 'spo2_pct_below88',
+    'eeg_n3_rel_beta',
+]
+
+ALL_MODEL_FEATURES = [
+    ('model_i0002', MODEL_I0002_FEATURES),
+    ('model_i0006', MODEL_I0006_FEATURES),
+    ('model_s0001', MODEL_S0001_FEATURES),
+    ('model_mean', MODEL_MEAN_FEATURES),
+]
+
+MODEL_C = 0.005
+N_MODELS = 4
 
 EEG_CANDIDATES = ['c3-m2', 'c4-m1', 'f3-m2', 'f4-m1', 'o1-m2', 'o2-m1']
 
@@ -118,6 +151,35 @@ def _bout_stats(valid_stages, stage_val):
     return np.nan, np.nan
 
 
+def _clipped_kurtosis(eeg_segment, eeg_fs):
+    """Kurtosis of EEG segment with 1-99th percentile clipping."""
+    from scipy.stats import kurtosis as scipy_kurtosis
+    if len(eeg_segment) <= int(4 * eeg_fs):
+        return np.nan
+    p1, p99 = np.percentile(eeg_segment, [1, 99])
+    return float(scipy_kurtosis(np.clip(eeg_segment, p1, p99), fisher=True))
+
+
+def _replace_inf(X):
+    """Replace inf with NaN in feature array."""
+    return np.where(np.isinf(X), np.nan, X)
+
+
+def _bandpower(signal, fs, lo, hi):
+    """Relative bandpower in [lo, hi] Hz."""
+    from scipy.signal import welch
+    if len(signal) < int(4 * fs):
+        return np.nan
+    nperseg = min(int(4 * fs), len(signal))
+    freqs, psd = welch(signal, fs=fs, nperseg=nperseg, noverlap=nperseg // 2)
+    total_mask = (freqs >= 0.5) & (freqs <= 30.0)
+    total_power = _trapz(psd[total_mask], freqs[total_mask])
+    if total_power <= 0:
+        return np.nan
+    band_mask = (freqs >= lo) & (freqs <= hi)
+    return float(_trapz(psd[band_mask], freqs[band_mask]) / total_power)
+
+
 # ============================================================
 # Feature Extractors
 # ============================================================
@@ -140,12 +202,8 @@ def extract_caisr_features(algo_data):
         feat['total_recording_min'] = float(len(stages) * 30 / 60.0) if len(stages) > 0 else np.nan
 
     if total_epochs > 0:
-        feat['pct_wake'] = float(np.mean(valid_stages == 5))
         feat['pct_rem'] = float(np.mean(valid_stages == 4))
         sleep_mask = (valid_stages >= 1) & (valid_stages <= 4)
-        total_sleep_epochs = np.sum(sleep_mask)
-        feat['sleep_efficiency'] = float(np.mean(sleep_mask))
-        feat['total_sleep_time_min'] = float(total_sleep_epochs * 30 / 60.0)
 
         # Awakenings
         sleep_indices = np.where(sleep_mask)[0]
@@ -172,14 +230,11 @@ def extract_caisr_features(algo_data):
             for j, dn in enumerate(stage_names):
                 feat[f'trans_{sn}_{dn}'] = float(trans_prob[i, j])
 
-        # Bout statistics for R, W, N3
-        feat['bout_mean_R'], feat['bout_std_R'] = _bout_stats(valid_stages, 4)
-        feat['bout_mean_W'], feat['bout_std_W'] = _bout_stats(valid_stages, 5)
-        feat['bout_mean_N3'], _ = _bout_stats(valid_stages, 1)
+        # Bout statistics for R, W
+        _, feat['bout_std_R'] = _bout_stats(valid_stages, 4)
+        _, feat['bout_std_W'] = _bout_stats(valid_stages, 5)
     else:
-        for k in ['pct_wake', 'pct_rem', 'sleep_efficiency', 'total_sleep_time_min',
-                   'n_awakenings', 'bout_mean_R', 'bout_std_R', 'bout_mean_W',
-                   'bout_std_W', 'bout_mean_N3']:
+        for k in ['pct_rem', 'n_awakenings', 'bout_std_R', 'bout_std_W']:
             feat[k] = np.nan
         for sn in ['W', 'N1', 'N2', 'N3', 'R']:
             for dn in ['W', 'N1', 'N2', 'N3', 'R']:
@@ -191,10 +246,10 @@ def extract_caisr_features(algo_data):
 
     # CAISR probability features
     prob_channels = {
-        'caisr_prob_w': ['std', 'min'],
+        'caisr_prob_w': ['min'],
         'caisr_prob_r': ['std'],
-        'caisr_prob_arous': ['std'],
-        'caisr_prob_n1': ['max'],
+        'caisr_prob_arous': ['std', 'max', 'min'],
+        'caisr_prob_n1': ['min'],
         'caisr_prob_n2': ['max'],
     }
     for ch_name, stats in prob_channels.items():
@@ -233,8 +288,172 @@ def extract_caisr_features(algo_data):
     return feat
 
 
+def extract_temporal_features(algo_data):
+    """Extract sleep cycle count and N3 first/second half ratio."""
+    feat = OrderedDict()
+    stages = algo_data.get('stage_caisr', np.array([]))
+    if len(stages) == 0:
+        feat['n_sleep_cycles'] = np.nan
+        feat['n3_first_vs_second_half'] = np.nan
+        return feat
+
+    stages = np.array(stages)
+    sleep_mask = (stages >= 1) & (stages <= 4)
+    sleep_indices = np.where(sleep_mask)[0]
+    if len(sleep_indices) < 2:
+        feat['n_sleep_cycles'] = np.nan
+        feat['n3_first_vs_second_half'] = np.nan
+        return feat
+
+    sleep_onset_idx = sleep_indices[0]
+    sleep_end_idx = sleep_indices[-1]
+
+    # Sleep cycles: NREM->REM transitions
+    in_nrem = False
+    in_rem = False
+    cycle_starts = []
+    cycle_ends = []
+
+    for i in range(sleep_onset_idx, sleep_end_idx + 1):
+        s = stages[i]
+        if s in (1, 2, 3) and not in_nrem:
+            in_nrem = True
+            in_rem = False
+            cycle_starts.append(i)
+        elif s == 4 and in_nrem:
+            in_rem = True
+            in_nrem = False
+        elif s in (1, 2, 3) and in_rem:
+            cycle_ends.append(i - 1)
+            in_nrem = True
+            in_rem = False
+            cycle_starts.append(i)
+    if in_rem and len(cycle_starts) > len(cycle_ends):
+        cycle_ends.append(sleep_end_idx)
+
+    feat['n_sleep_cycles'] = float(min(len(cycle_starts), len(cycle_ends)))
+
+    # N3 first vs second half
+    mid = sleep_onset_idx + (sleep_end_idx - sleep_onset_idx) // 2
+    first_half = stages[sleep_onset_idx:mid]
+    second_half = stages[mid:sleep_end_idx + 1]
+    n3_first = np.sum(first_half == 1)
+    n3_second = np.sum(second_half == 1)
+    feat['n3_first_vs_second_half'] = float(n3_first / n3_second) if n3_second > 0 else np.nan
+
+    return feat
+
+
+def extract_markov_features(algo_data):
+    """Extract Markov chain stationary distribution divergence."""
+    feat = OrderedDict()
+    stages = algo_data.get('stage_caisr', np.array([]))
+    if len(stages) == 0:
+        feat['stationary_dist_divergence'] = np.nan
+        return feat
+
+    valid = stages[(stages >= 1) & (stages <= 5)]
+    if len(valid) < 10:
+        feat['stationary_dist_divergence'] = np.nan
+        return feat
+
+    stage_order = [5, 3, 2, 1, 4]  # W, N1, N2, N3, R
+    n = len(stage_order)
+    T = np.zeros((n, n))
+    stage_to_idx = {s: i for i, s in enumerate(stage_order)}
+
+    for i in range(len(valid) - 1):
+        s1, s2 = int(valid[i]), int(valid[i + 1])
+        if s1 in stage_to_idx and s2 in stage_to_idx:
+            T[stage_to_idx[s1], stage_to_idx[s2]] += 1
+
+    row_sums = T.sum(axis=1, keepdims=True)
+    row_sums[row_sums == 0] = 1
+    P = T / row_sums
+
+    try:
+        eigenvalues, eigenvectors = np.linalg.eig(P.T)
+        idx = np.argmin(np.abs(eigenvalues - 1.0))
+        pi = np.real(eigenvectors[:, idx])
+        pi = np.abs(pi)
+        pi_sum = pi.sum()
+        if pi_sum > 0:
+            pi = pi / pi_sum
+        else:
+            raise ValueError("Zero stationary distribution")
+
+        observed = np.array([np.sum(valid == s) for s in stage_order], dtype=float)
+        obs_sum = observed.sum()
+        if obs_sum > 0:
+            observed = observed / obs_sum
+        mask = (observed > 0) & (pi > 0)
+        if np.any(mask):
+            kl = float(np.sum(observed[mask] * np.log2(observed[mask] / pi[mask])))
+            feat['stationary_dist_divergence'] = kl if np.isfinite(kl) else np.nan
+        else:
+            feat['stationary_dist_divergence'] = np.nan
+    except Exception:
+        feat['stationary_dist_divergence'] = np.nan
+
+    return feat
+
+
+def extract_arousal_features(algo_data):
+    """Extract arousal duration and clustering features."""
+    feat = OrderedDict()
+    arousal_signal = algo_data.get('arousal_caisr', np.array([]))
+    stage_signal = algo_data.get('stage_caisr', np.array([]))
+
+    if len(arousal_signal) == 0:
+        feat['arousal_duration_mean'] = np.nan
+        feat['arousal_duration_std'] = np.nan
+        feat['arousal_nrem_pct'] = np.nan
+        return feat
+
+    binary = (arousal_signal > 0.5).astype(int)
+    diff = np.diff(binary, prepend=0)
+    starts = np.where(diff == 1)[0]
+    ends = np.where(diff == -1)[0]
+
+    if len(starts) == 0:
+        feat['arousal_duration_mean'] = np.nan
+        feat['arousal_duration_std'] = np.nan
+        feat['arousal_nrem_pct'] = np.nan
+        return feat
+
+    if len(ends) > 0 and ends[0] < starts[0]:
+        ends = ends[1:]
+    if len(starts) > len(ends):
+        ends = np.append(ends, len(arousal_signal))
+    n_events = min(len(starts), len(ends))
+    starts = starts[:n_events]
+    ends = ends[:n_events]
+
+    if n_events == 0:
+        feat['arousal_duration_mean'] = np.nan
+        feat['arousal_duration_std'] = np.nan
+        feat['arousal_nrem_pct'] = np.nan
+        return feat
+
+    durations = (ends - starts).astype(float)
+    feat['arousal_duration_mean'] = float(np.mean(durations))
+    feat['arousal_duration_std'] = float(np.std(durations)) if n_events > 1 else np.nan
+
+    if len(stage_signal) > 0:
+        nrem_arousals = 0
+        for s in starts:
+            epoch_idx = int(s / 30)
+            if epoch_idx < len(stage_signal) and stage_signal[epoch_idx] in (1, 2, 3):
+                nrem_arousals += 1
+        feat['arousal_nrem_pct'] = float(nrem_arousals / n_events)
+    else:
+        feat['arousal_nrem_pct'] = np.nan
+
+    return feat
+
+
 def extract_spo2_features(channels, fs_dict):
-    """Extract SpO2 features: mean, std, pct_below90."""
+    """Extract SpO2 features: mean, min, std, pct_below90, pct_below88."""
     feat = OrderedDict()
     spo2_sig = None
     for ch in ['spo2', 'sao2']:
@@ -242,9 +461,8 @@ def extract_spo2_features(channels, fs_dict):
             spo2_sig = channels[ch].astype(float)
             break
     if spo2_sig is None or len(spo2_sig) == 0:
-        feat['spo2_pct_below90'] = np.nan
-        feat['spo2_mean'] = np.nan
-        feat['spo2_std'] = np.nan
+        feat['spo2_min'] = np.nan
+        feat['spo2_pct_below88'] = np.nan
         return feat
 
     if np.nanmax(spo2_sig) <= 1.5:
@@ -252,18 +470,16 @@ def extract_spo2_features(channels, fs_dict):
 
     valid = spo2_sig[(spo2_sig > 10) & (spo2_sig <= 100)]
     if len(valid) == 0:
-        feat['spo2_pct_below90'] = np.nan
-        feat['spo2_mean'] = np.nan
-        feat['spo2_std'] = np.nan
+        feat['spo2_min'] = np.nan
+        feat['spo2_pct_below88'] = np.nan
     else:
-        feat['spo2_pct_below90'] = float(np.mean(valid < 90))
-        feat['spo2_mean'] = float(np.mean(valid))
-        feat['spo2_std'] = float(np.std(valid))
+        feat['spo2_min'] = float(np.min(valid))
+        feat['spo2_pct_below88'] = float(np.mean(valid < 88))
     return feat
 
 
-def extract_hrv_features(channels, fs_dict):
-    """Extract HRV features: RMSSD and pNN50."""
+def extract_hrv_features(channels, fs_dict, stage_signal=None):
+    """Extract HRV features: RMSSD, pNN50, LF/HF ratio, stage-specific, sample entropy."""
     feat = OrderedDict()
     ecg_sig, ecg_fs = None, None
     for ch in ['ecg', 'ekg']:
@@ -272,184 +488,420 @@ def extract_hrv_features(channels, fs_dict):
             ecg_fs = fs_dict[ch]
             break
     if ecg_sig is None or ecg_fs is None or ecg_fs <= 0:
-        feat['hrv_rmssd'] = np.nan
-        feat['hrv_pnn50'] = np.nan
+        for k in ['hrv_pnn50', 'hrv_lf_hf_ratio', 'hrv_rmssd_rem',
+                   'hrv_sdnn_rem', 'hrv_sample_entropy']:
+            feat[k] = np.nan
         return feat
 
     max_samples = int(2 * 3600 * ecg_fs)
-    ecg_sig = ecg_sig[:max_samples].astype(float)
+    ecg_seg = ecg_sig[:max_samples].astype(float)
 
     try:
         import neurokit2 as nk
-        cleaned = nk.ecg_clean(ecg_sig, sampling_rate=int(ecg_fs))
+        cleaned = nk.ecg_clean(ecg_seg, sampling_rate=int(ecg_fs))
         _, info = nk.ecg_peaks(cleaned, sampling_rate=int(ecg_fs))
-        r_peaks = info.get('ECG_R_Peaks', [])
+        rpeak_indices = np.array(info.get('ECG_R_Peaks', []))
     except Exception:
-        r_peaks = _simple_rpeak_detect(ecg_sig, ecg_fs)
+        rpeak_indices = np.array(_simple_rpeak_detect(ecg_seg, ecg_fs))
 
-    if len(r_peaks) < 10:
-        feat['hrv_rmssd'] = np.nan
-        feat['hrv_pnn50'] = np.nan
+    if len(rpeak_indices) < 10:
+        for k in ['hrv_pnn50', 'hrv_lf_hf_ratio', 'hrv_rmssd_rem',
+                   'hrv_sdnn_rem', 'hrv_sample_entropy']:
+            feat[k] = np.nan
         return feat
 
-    rr = np.diff(np.array(r_peaks)) / ecg_fs * 1000.0  # ms
+    rr = np.diff(rpeak_indices) / ecg_fs * 1000.0  # ms
     rr = rr[(rr > 300) & (rr < 2000)]
     if len(rr) < 10:
-        feat['hrv_rmssd'] = np.nan
-        feat['hrv_pnn50'] = np.nan
+        for k in ['hrv_pnn50', 'hrv_lf_hf_ratio', 'hrv_rmssd_rem',
+                   'hrv_sdnn_rem', 'hrv_sample_entropy']:
+            feat[k] = np.nan
         return feat
 
-    feat['hrv_rmssd'] = float(np.sqrt(np.mean(np.diff(rr) ** 2)))
     feat['hrv_pnn50'] = float(np.mean(np.abs(np.diff(rr)) > 50))
-    return feat
 
-
-def _clipped_kurtosis(eeg_segment, eeg_fs):
-    """Kurtosis of EEG segment with 1-99th percentile clipping."""
-    from scipy.stats import kurtosis as scipy_kurtosis
-    if len(eeg_segment) <= int(4 * eeg_fs):
-        return np.nan
-    p1, p99 = np.percentile(eeg_segment, [1, 99])
-    return float(scipy_kurtosis(np.clip(eeg_segment, p1, p99), fisher=True))
-
-
-def _replace_inf(X):
-    """Replace inf with NaN in feature array."""
-    return np.where(np.isinf(X), np.nan, X)
-
-
-def extract_eeg_features(eeg_sig, eeg_fs, n2_eeg, n3_eeg, rem_eeg):
-    """Extract EEG features: mobility, kurtosis, activity, relative delta.
-
-    Takes pre-computed stage-specific EEG segments to avoid redundant extraction.
-    """
-    from scipy.signal import welch
-
-    feat = OrderedDict()
-
-    nan_keys = ['eeg_n3_mobility', 'eeg_n2_kurtosis', 'eeg_n3_kurtosis',
-                'eeg_rem_activity', 'eeg_n3_rel_delta']
-
-    if eeg_sig is None or eeg_fs is None or eeg_fs <= 0:
-        for k in nan_keys:
-            feat[k] = np.nan
-        return feat
-
-    # N3 mobility (Hjorth)
-    if len(n3_eeg) > int(4 * eeg_fs):
-        activity = np.var(n3_eeg)
-        if activity > 0:
-            feat['eeg_n3_mobility'] = float(np.sqrt(np.var(np.diff(n3_eeg)) / activity))
-        else:
-            feat['eeg_n3_mobility'] = np.nan
-    else:
-        feat['eeg_n3_mobility'] = np.nan
-
-    feat['eeg_n2_kurtosis'] = _clipped_kurtosis(n2_eeg, eeg_fs)
-    feat['eeg_n3_kurtosis'] = _clipped_kurtosis(n3_eeg, eeg_fs)
-
-    # REM activity (Hjorth activity = variance)
-    if len(rem_eeg) > int(4 * eeg_fs):
-        feat['eeg_rem_activity'] = float(np.var(rem_eeg))
-    else:
-        feat['eeg_rem_activity'] = np.nan
-
-    # N3 relative delta power
-    if len(n3_eeg) > int(4 * eeg_fs):
+    # LF/HF ratio (frequency domain)
+    feat['hrv_lf_hf_ratio'] = np.nan
+    if len(rr) > 100:
         try:
-            nperseg = min(int(4 * eeg_fs), len(n3_eeg))
-            freqs, psd = welch(n3_eeg, fs=eeg_fs, nperseg=nperseg, noverlap=nperseg // 2)
-            delta_mask = (freqs >= 0.5) & (freqs <= 4.0)
-            total_mask = (freqs >= 0.5) & (freqs <= 30.0)
-            total_power = _trapz(psd[total_mask], freqs[total_mask])
-            if total_power > 0:
-                delta_power = _trapz(psd[delta_mask], freqs[delta_mask])
-                feat['eeg_n3_rel_delta'] = float(delta_power / total_power)
-            else:
-                feat['eeg_n3_rel_delta'] = np.nan
+            from scipy.interpolate import interp1d
+            from scipy.signal import welch
+            rr_times = np.cumsum(rr) / 1000.0
+            rr_times = rr_times - rr_times[0]
+            rr_vals = rr[:len(rr_times)] if len(rr_times) <= len(rr) else rr[:len(rr_times)]
+            interp_func = interp1d(rr_times, rr_vals[:len(rr_times)],
+                                   kind='linear', fill_value='extrapolate')
+            t_uniform = np.arange(0, rr_times[-1], 0.25)  # 4 Hz
+            rr_uniform = interp_func(t_uniform)
+            freqs, psd = welch(rr_uniform, fs=4.0, nperseg=min(256, len(rr_uniform)))
+            lf_mask = (freqs >= 0.04) & (freqs <= 0.15)
+            hf_mask = (freqs >= 0.15) & (freqs <= 0.40)
+            lf = _trapz(psd[lf_mask], freqs[lf_mask])
+            hf = _trapz(psd[hf_mask], freqs[hf_mask])
+            feat['hrv_lf_hf_ratio'] = float(lf / hf) if hf > 0 else np.nan
         except Exception:
-            feat['eeg_n3_rel_delta'] = np.nan
-    else:
-        feat['eeg_n3_rel_delta'] = np.nan
+            pass
 
-    return feat
+    # Stage-specific HRV (REM)
+    feat['hrv_rmssd_rem'] = np.nan
+    feat['hrv_sdnn_rem'] = np.nan
+    if stage_signal is not None and len(stage_signal) > 0 and len(rpeak_indices) > 1:
+        n_ecg = len(ecg_seg)
+        n_stages = len(stage_signal)
+        if n_stages > 0:
+            samples_per_epoch = n_ecg / n_stages
+            stage_rr = []
+            for i in range(len(rpeak_indices) - 1):
+                mid_sample = (rpeak_indices[i] + rpeak_indices[i + 1]) // 2
+                epoch_idx = int(mid_sample / samples_per_epoch)
+                if 0 <= epoch_idx < n_stages and stage_signal[epoch_idx] == 4:  # REM
+                    rr_ms = (rpeak_indices[i + 1] - rpeak_indices[i]) / ecg_fs * 1000
+                    if 300 < rr_ms < 2000:
+                        stage_rr.append(rr_ms)
+            stage_rr = np.array(stage_rr)
+            if len(stage_rr) >= 10:
+                feat['hrv_rmssd_rem'] = float(np.sqrt(np.mean(np.diff(stage_rr) ** 2)))
+                feat['hrv_sdnn_rem'] = float(np.std(stage_rr, ddof=1))
 
-
-def extract_nonlinear_features(eeg_sig, eeg_fs, n2_eeg, n3_eeg):
-    """Extract nonlinear EEG features: DFA, slow wave density, SO-spindle coupling.
-
-    Takes pre-computed stage-specific EEG segments to avoid redundant extraction.
-    """
-    feat = OrderedDict()
-
-    nan_keys = ['dfa_n3', 'sw_density_n2', 'so_count_n2', 'so_spindle_coupling_n2']
-
-    if eeg_sig is None or eeg_fs is None or eeg_fs <= 0:
-        for k in nan_keys:
-            feat[k] = np.nan
-        return feat
-
-    # --- DFA in N3 ---
-    feat['dfa_n3'] = np.nan
-    if len(n3_eeg) > int(30 * eeg_fs):
+    # HRV sample entropy
+    feat['hrv_sample_entropy'] = np.nan
+    if len(rr) >= 50:
         try:
-            from scipy.signal import resample
-            target_fs = 100.0
-            if eeg_fs > target_fs * 1.5:
-                ds_eeg = resample(n3_eeg, int(len(n3_eeg) * target_fs / eeg_fs))
-            else:
-                ds_eeg = n3_eeg
-                target_fs = eeg_fs
-            ds_eeg = ds_eeg[:int(600 * target_fs)]
-
             import antropy as ant
-            feat['dfa_n3'] = float(ant.detrended_fluctuation(ds_eeg))
+            feat['hrv_sample_entropy'] = float(ant.sample_entropy(rr[:3000]))
         except Exception:
-            feat['dfa_n3'] = np.nan
+            pass
 
-    # --- Slow waves and SO-spindle coupling in N2 ---
+    return feat
+
+
+def extract_eeg_spectral_features(eeg_sig, eeg_fs, stage_segments):
+    """Extract per-stage spectral bandpower, Hjorth, kurtosis, and spectral ratios."""
+    from scipy.signal import welch
+    from scipy.stats import kurtosis as scipy_kurtosis
+
+    feat = OrderedDict()
+
+    if eeg_sig is None or eeg_fs is None or eeg_fs <= 0:
+        nan_feats = [
+            'eeg_overall_mobility',
+            'eeg_rem_rel_theta', 'eeg_rem_rel_alpha', 'eeg_rem_activity', 'eeg_rem_complexity',
+            'eeg_wake_rel_beta',
+            'eeg_n1_rel_theta',
+            'eeg_n2_rel_theta', 'eeg_n2_kurtosis',
+            'eeg_n3_rel_delta', 'eeg_n3_rel_theta', 'eeg_n3_rel_sigma', 'eeg_n3_rel_beta',
+            'eeg_n3_mobility', 'eeg_n3_kurtosis', 'eeg_n3_activity',
+            'theta_alpha_ratio_overall', 'dtabr_n2',
+            'spectral_edge_95_n2',
+        ]
+        for k in nan_feats:
+            feat[k] = np.nan
+        return feat
+
+    bands = {
+        'delta': (0.5, 4.0), 'theta': (4.0, 8.0), 'alpha': (8.0, 13.0),
+        'sigma': (11.0, 16.0), 'beta': (16.0, 30.0),
+    }
+
+    def _compute_psd(signal):
+        if len(signal) < int(4 * eeg_fs):
+            return None, None
+        nperseg = min(int(4 * eeg_fs), len(signal))
+        return welch(signal, fs=eeg_fs, nperseg=nperseg, noverlap=nperseg // 2)
+
+    def _rel_power(freqs, psd, lo, hi):
+        total_mask = (freqs >= 0.5) & (freqs <= 30.0)
+        total_power = _trapz(psd[total_mask], freqs[total_mask])
+        if total_power <= 0:
+            return np.nan
+        band_mask = (freqs >= lo) & (freqs <= hi)
+        return float(_trapz(psd[band_mask], freqs[band_mask]) / total_power)
+
+    def _hjorth(signal):
+        if len(signal) < int(4 * eeg_fs):
+            return np.nan, np.nan, np.nan
+        activity = float(np.var(signal))
+        if activity <= 0:
+            return activity, np.nan, np.nan
+        d1 = np.diff(signal)
+        var_d1 = np.var(d1)
+        mobility = float(np.sqrt(var_d1 / activity))
+        d2 = np.diff(d1)
+        var_d2 = np.var(d2)
+        mob_d1 = np.sqrt(var_d2 / var_d1) if var_d1 > 0 else 0.0
+        complexity = float(mob_d1 / mobility) if mobility > 0 else 0.0
+        return activity, mobility, complexity
+
+    # Overall mobility
+    _, feat['eeg_overall_mobility'], _ = _hjorth(eeg_sig)
+
+    # REM features
+    rem_eeg = stage_segments.get('rem', np.array([]))
+    freqs, psd = _compute_psd(rem_eeg) if len(rem_eeg) > 0 else (None, None)
+    if freqs is not None:
+        feat['eeg_rem_rel_theta'] = _rel_power(freqs, psd, 4.0, 8.0)
+        feat['eeg_rem_rel_alpha'] = _rel_power(freqs, psd, 8.0, 13.0)
+    else:
+        feat['eeg_rem_rel_theta'] = np.nan
+        feat['eeg_rem_rel_alpha'] = np.nan
+    act, _, cplx = _hjorth(rem_eeg)
+    feat['eeg_rem_activity'] = act
+    feat['eeg_rem_complexity'] = cplx
+
+    # Wake features
+    wake_eeg = stage_segments.get('wake', np.array([]))
+    feat['eeg_wake_rel_beta'] = _bandpower(wake_eeg, eeg_fs, 16.0, 30.0) if len(wake_eeg) > int(4 * eeg_fs) else np.nan
+
+    # N1 features
+    n1_eeg = stage_segments.get('n1', np.array([]))
+    feat['eeg_n1_rel_theta'] = _bandpower(n1_eeg, eeg_fs, 4.0, 8.0) if len(n1_eeg) > int(4 * eeg_fs) else np.nan
+
+    # N2 features
+    n2_eeg = stage_segments.get('n2', np.array([]))
+    freqs_n2, psd_n2 = _compute_psd(n2_eeg) if len(n2_eeg) > 0 else (None, None)
+    if freqs_n2 is not None:
+        feat['eeg_n2_rel_theta'] = _rel_power(freqs_n2, psd_n2, 4.0, 8.0)
+    else:
+        feat['eeg_n2_rel_theta'] = np.nan
+    feat['eeg_n2_kurtosis'] = _clipped_kurtosis(n2_eeg, eeg_fs)
+
+    # Spectral edge 95% in N2
+    feat['spectral_edge_95_n2'] = np.nan
+    if freqs_n2 is not None:
+        try:
+            valid = (freqs_n2 >= 0.5) & (freqs_n2 <= 45)
+            cumpower = np.cumsum(psd_n2[valid])
+            if cumpower[-1] > 0:
+                cumpower_norm = cumpower / cumpower[-1]
+                feat['spectral_edge_95_n2'] = float(
+                    freqs_n2[valid][np.searchsorted(cumpower_norm, 0.95)]
+                )
+        except Exception:
+            pass
+
+    # N3 features
+    n3_eeg = stage_segments.get('n3', np.array([]))
+    freqs_n3, psd_n3 = _compute_psd(n3_eeg) if len(n3_eeg) > 0 else (None, None)
+    if freqs_n3 is not None:
+        feat['eeg_n3_rel_delta'] = _rel_power(freqs_n3, psd_n3, 0.5, 4.0)
+        feat['eeg_n3_rel_theta'] = _rel_power(freqs_n3, psd_n3, 4.0, 8.0)
+        feat['eeg_n3_rel_sigma'] = _rel_power(freqs_n3, psd_n3, 11.0, 16.0)
+        feat['eeg_n3_rel_beta'] = _rel_power(freqs_n3, psd_n3, 16.0, 30.0)
+    else:
+        for k in ['eeg_n3_rel_delta', 'eeg_n3_rel_theta', 'eeg_n3_rel_sigma', 'eeg_n3_rel_beta']:
+            feat[k] = np.nan
+    act_n3, mob_n3, _ = _hjorth(n3_eeg)
+    feat['eeg_n3_mobility'] = mob_n3
+    feat['eeg_n3_kurtosis'] = _clipped_kurtosis(n3_eeg, eeg_fs)
+    feat['eeg_n3_activity'] = act_n3
+
+    # Spectral ratios
+    # Theta/alpha ratio overall
+    feat['theta_alpha_ratio_overall'] = np.nan
+    freqs_all, psd_all = _compute_psd(eeg_sig)
+    if freqs_all is not None:
+        theta_all = _rel_power(freqs_all, psd_all, 4.0, 8.0)
+        alpha_all = _rel_power(freqs_all, psd_all, 8.0, 13.0)
+        if not np.isnan(alpha_all) and alpha_all > 0:
+            feat['theta_alpha_ratio_overall'] = float(theta_all / alpha_all)
+
+    # DTABR in N2
+    feat['dtabr_n2'] = np.nan
+    if freqs_n2 is not None:
+        delta_n2 = _rel_power(freqs_n2, psd_n2, 0.5, 4.0)
+        theta_n2 = _rel_power(freqs_n2, psd_n2, 4.0, 8.0)
+        alpha_n2 = _rel_power(freqs_n2, psd_n2, 8.0, 13.0)
+        beta_n2 = _rel_power(freqs_n2, psd_n2, 16.0, 30.0)
+        denom = alpha_n2 + beta_n2
+        if not np.isnan(denom) and denom > 0:
+            feat['dtabr_n2'] = float((delta_n2 + theta_n2) / denom)
+
+    return feat
+
+
+def extract_nonlinear_features(eeg_sig, eeg_fs, stage_segments):
+    """Extract DFA, SW density/coupling, spindle density, complexity measures."""
+    feat = OrderedDict()
+
+    nan_keys = [
+        'dfa_n3', 'dfa_wake', 'sw_density_n2', 'so_count_n2',
+        'so_spindle_coupling_n2', 'sw_slope_mean_n3', 'sw_frequency_mean_n2',
+        'sw_frequency_mean_n3', 'kcomplex_density_n2', 'spindle_density_n2',
+        'spindle_density_n3', 'sample_entropy_rem', 'petrosian_fd_n2',
+        'higuchi_fd_n2',
+    ]
+
+    if eeg_sig is None or eeg_fs is None or eeg_fs <= 0:
+        for k in nan_keys:
+            feat[k] = np.nan
+        return feat
+
+    n2_eeg = stage_segments.get('n2', np.array([]))
+    n3_eeg = stage_segments.get('n3', np.array([]))
+    rem_eeg = stage_segments.get('rem', np.array([]))
+    wake_eeg = stage_segments.get('wake', np.array([]))
+
+    # --- DFA ---
+    from scipy.signal import resample
+    target_fs = 100.0
+    ds_ratio = target_fs / eeg_fs if eeg_fs > target_fs * 1.5 else 1.0
+    actual_fs = target_fs if ds_ratio < 1.0 else eeg_fs
+
+    def _ds(sig, max_sec=600):
+        if len(sig) < int(30 * eeg_fs):
+            return None
+        if ds_ratio < 1.0:
+            ds = resample(sig, int(len(sig) * ds_ratio))
+        else:
+            ds = sig
+        return ds[:int(max_sec * actual_fs)]
+
+    feat['dfa_n3'] = np.nan
+    ds_n3 = _ds(n3_eeg)
+    if ds_n3 is not None:
+        try:
+            import antropy as ant
+            feat['dfa_n3'] = float(ant.detrended_fluctuation(ds_n3))
+        except Exception:
+            pass
+
+    feat['dfa_wake'] = np.nan
+    ds_wake = _ds(wake_eeg)
+    if ds_wake is not None:
+        try:
+            import antropy as ant
+            feat['dfa_wake'] = float(ant.detrended_fluctuation(ds_wake))
+        except Exception:
+            pass
+
+    # --- Complexity: petrosian_fd_n2, higuchi_fd_n2, sample_entropy_rem ---
+    feat['petrosian_fd_n2'] = np.nan
+    feat['higuchi_fd_n2'] = np.nan
+    ds_n2 = _ds(n2_eeg, max_sec=300)
+    if ds_n2 is not None:
+        try:
+            import antropy as ant
+            feat['petrosian_fd_n2'] = float(ant.petrosian_fd(ds_n2))
+            feat['higuchi_fd_n2'] = float(ant.higuchi_fd(ds_n2, kmax=10))
+        except Exception:
+            pass
+
+    feat['sample_entropy_rem'] = np.nan
+    ds_rem = _ds(rem_eeg, max_sec=120)
+    if ds_rem is not None and len(ds_rem) >= int(30 * actual_fs):
+        try:
+            import antropy as ant
+            feat['sample_entropy_rem'] = float(ant.sample_entropy(ds_rem[:int(120 * actual_fs)]))
+        except Exception:
+            pass
+
+    # --- YASA: SW, spindles, K-complex ---
+    # Downsample to 128 Hz for YASA
+    yasa_fs = eeg_fs
+    if eeg_fs > 128 * 1.2:
+        yasa_fs = 128.0
+        yasa_ratio = yasa_fs / eeg_fs
+    else:
+        yasa_ratio = 1.0
+
+    max_yasa_samples = int(60 * 60 * yasa_fs)
+
+    def _yasa_prep(sig):
+        if len(sig) < int(10 * eeg_fs):
+            return None, 0.0
+        if yasa_ratio < 1.0:
+            ds = resample(sig, int(len(sig) * yasa_ratio))
+        else:
+            ds = sig
+        capped = ds[:max_yasa_samples]
+        dur_min = len(capped) / yasa_fs / 60.0
+        return capped, dur_min
+
     feat['sw_density_n2'] = np.nan
     feat['so_count_n2'] = np.nan
     feat['so_spindle_coupling_n2'] = np.nan
+    feat['sw_frequency_mean_n2'] = np.nan
+    feat['kcomplex_density_n2'] = np.nan
+    feat['spindle_density_n2'] = np.nan
 
-    # Cap N2 to 60 minutes for yasa performance
-    max_n2_samples = int(60 * 60 * eeg_fs)
-    n2_capped = n2_eeg[:max_n2_samples] if len(n2_eeg) > max_n2_samples else n2_eeg
-
-    if len(n2_capped) > int(30 * eeg_fs):
+    n2_yasa, n2_dur_min = _yasa_prep(n2_eeg)
+    if n2_yasa is not None:
         try:
             import yasa
 
-            sw = yasa.sw_detect(n2_capped, sf=eeg_fs, verbose=False)
-            if sw is not None:
-                sw_summary = sw.summary()
-                n2_duration_min = len(n2_capped) / eeg_fs / 60.0
-                feat['sw_density_n2'] = float(len(sw_summary) / n2_duration_min) if n2_duration_min > 0 else np.nan
-                feat['so_count_n2'] = float(len(sw_summary))
-
-                sp = yasa.spindles_detect(n2_capped, sf=eeg_fs, verbose=False)
-                if sp is not None and len(sw_summary) > 0:
-                    sp_summary = sp.summary()
-                    if len(sp_summary) > 0:
-                        sw_starts = sw_summary['Start'].values
-                        sp_starts = np.sort(sp_summary['Start'].values)
-                        coupled = 0
-                        for sw_start in sw_starts:
-                            idx = np.searchsorted(sp_starts, sw_start)
-                            if idx < len(sp_starts) and (sp_starts[idx] - sw_start) < 1.5:
-                                coupled += 1
-                        feat['so_spindle_coupling_n2'] = float(coupled / len(sw_starts))
-                    else:
-                        feat['so_spindle_coupling_n2'] = 0.0
-                else:
-                    feat['so_spindle_coupling_n2'] = 0.0
-            else:
+            # SW detection in N2
+            sw = yasa.sw_detect(n2_yasa, sf=yasa_fs, verbose=False)
+            sw_df = sw.summary() if sw is not None else None
+            if sw_df is not None and len(sw_df) > 0:
+                feat['sw_density_n2'] = float(len(sw_df) / n2_dur_min) if n2_dur_min > 0 else np.nan
+                feat['so_count_n2'] = float(len(sw_df))
+                feat['sw_frequency_mean_n2'] = float(sw_df['Frequency'].mean())
+            elif n2_dur_min > 0:
                 feat['sw_density_n2'] = 0.0
                 feat['so_count_n2'] = 0.0
+
+            # Spindle detection in N2
+            sp = yasa.spindles_detect(n2_yasa, sf=yasa_fs, verbose=False)
+            sp_df = sp.summary() if sp is not None else None
+            if sp_df is not None and len(sp_df) > 0:
+                feat['spindle_density_n2'] = float(len(sp_df) / n2_dur_min) if n2_dur_min > 0 else np.nan
+
+                # SO-spindle coupling
+                if sw_df is not None and len(sw_df) > 0:
+                    sw_starts = sw_df['Start'].values
+                    sp_starts = np.sort(sp_df['Start'].values)
+                    coupled = 0
+                    for sw_start in sw_starts:
+                        idx = np.searchsorted(sp_starts, sw_start)
+                        if idx < len(sp_starts) and (sp_starts[idx] - sw_start) < 1.5:
+                            coupled += 1
+                    feat['so_spindle_coupling_n2'] = float(coupled / len(sw_starts))
+                else:
+                    feat['so_spindle_coupling_n2'] = 0.0
+            elif n2_dur_min > 0:
+                feat['spindle_density_n2'] = 0.0
                 feat['so_spindle_coupling_n2'] = 0.0
 
+            # K-complex detection in N2
+            try:
+                kc = yasa.sw_detect(
+                    n2_yasa, sf=yasa_fs,
+                    freq_sw=(0.5, 1.5), amp_neg=(40, 300), amp_ptp=(75, 500),
+                    verbose=False,
+                )
+                kc_df = kc.summary() if kc is not None else None
+                feat['kcomplex_density_n2'] = float(len(kc_df) / n2_dur_min) if kc_df is not None and n2_dur_min > 0 else 0.0
+            except Exception:
+                feat['kcomplex_density_n2'] = np.nan
+
         except Exception as e:
-            warnings.warn(f"Nonlinear feature extraction failed: {e}", stacklevel=2)
+            warnings.warn(f"N2 YASA failed: {e}", stacklevel=2)
+
+    # N3 features
+    feat['sw_slope_mean_n3'] = np.nan
+    feat['sw_frequency_mean_n3'] = np.nan
+    feat['spindle_density_n3'] = np.nan
+
+    n3_yasa, n3_dur_min = _yasa_prep(n3_eeg)
+    if n3_yasa is not None:
+        try:
+            import yasa
+
+            sw = yasa.sw_detect(n3_yasa, sf=yasa_fs, verbose=False)
+            sw_df = sw.summary() if sw is not None else None
+            if sw_df is not None and len(sw_df) > 0:
+                feat['sw_slope_mean_n3'] = float(sw_df['Slope'].mean())
+                feat['sw_frequency_mean_n3'] = float(sw_df['Frequency'].mean())
+
+            sp = yasa.spindles_detect(n3_yasa, sf=yasa_fs, verbose=False)
+            sp_df = sp.summary() if sp is not None else None
+            if sp_df is not None:
+                feat['spindle_density_n3'] = float(len(sp_df) / n3_dur_min) if n3_dur_min > 0 else 0.0
+            elif n3_dur_min > 0:
+                feat['spindle_density_n3'] = 0.0
+
+        except Exception as e:
+            warnings.warn(f"N3 YASA failed: {e}", stacklevel=2)
 
     return feat
 
@@ -467,6 +919,8 @@ def extract_all_features_for_record(patient_data, phys_channels, phys_fs,
     feat['age'] = float(load_age(patient_data))
     sex = load_sex(patient_data)
     feat['sex_female'] = 1.0 if sex == 'Female' else 0.0
+    race = get_standardized_race(patient_data).lower()
+    feat['race_unavail'] = 1.0 if race == 'unavailable' else 0.0
 
     # 2. Standardize channels and derive bipolar signals
     if phys_channels:
@@ -508,36 +962,40 @@ def extract_all_features_for_record(patient_data, phys_channels, phys_fs,
     # 3. CAISR features
     if algo_data:
         feat.update(extract_caisr_features(algo_data))
+        feat.update(extract_temporal_features(algo_data))
+        feat.update(extract_markov_features(algo_data))
+        feat.update(extract_arousal_features(algo_data))
     else:
-        # Fill all CAISR-derived features with NaN
-        for k in ['pct_rem', 'pct_wake', 'sleep_efficiency', 'arousal_index', 'ahi_auto',
-                   'n_awakenings', 'total_sleep_time_min', 'total_recording_min',
-                   'bout_mean_R', 'bout_std_R', 'bout_mean_W', 'bout_std_W', 'bout_mean_N3',
-                   'caisr_prob_arous_std', 'stage_prob_entropy_std', 'caisr_prob_r_std',
-                   'caisr_prob_w_min', 'caisr_prob_n1_max', 'caisr_prob_n2_max',
-                   'trans_R_W', 'trans_R_R', 'trans_W_N1', 'trans_R_N2']:
+        for k in ['total_recording_min', 'pct_rem', 'n_awakenings', 'bout_std_R',
+                   'bout_std_W', 'ahi_auto', 'arousal_index',
+                   'caisr_prob_w_min', 'caisr_prob_r_std', 'caisr_prob_arous_std',
+                   'caisr_prob_arous_max', 'caisr_prob_arous_min',
+                   'caisr_prob_n1_min', 'caisr_prob_n2_max',
+                   'stage_prob_entropy_std',
+                   'n_sleep_cycles', 'n3_first_vs_second_half',
+                   'stationary_dist_divergence',
+                   'arousal_duration_mean', 'arousal_duration_std', 'arousal_nrem_pct']:
             feat[k] = np.nan
+        for sn in ['W', 'N1', 'N2', 'N3', 'R']:
+            for dn in ['W', 'N1', 'N2', 'N3', 'R']:
+                feat[f'trans_{sn}_{dn}'] = np.nan
 
     # 4. SpO2
     feat.update(extract_spo2_features(std_channels, std_fs))
 
-    # 5. HRV
-    feat.update(extract_hrv_features(std_channels, std_fs))
+    # 5. HRV (pass stage signal for stage-specific HRV)
+    stage_signal = algo_data.get('stage_caisr', None) if algo_data else None
+    feat.update(extract_hrv_features(std_channels, std_fs, stage_signal))
 
     # 6. EEG features — compute stage segments once, share across extractors
-    stage_signal = algo_data.get('stage_caisr', None) if algo_data else None
     eeg_sig, eeg_fs = _find_best_eeg(std_channels, std_fs)
+    stage_segments = {}
     if eeg_sig is not None and eeg_fs is not None and stage_signal is not None:
-        n2_eeg = _get_stage_eeg(eeg_sig, eeg_fs, stage_signal, 2)
-        n3_eeg = _get_stage_eeg(eeg_sig, eeg_fs, stage_signal, 1)
-        rem_eeg = _get_stage_eeg(eeg_sig, eeg_fs, stage_signal, 4)
-    else:
-        n2_eeg, n3_eeg, rem_eeg = np.array([]), np.array([]), np.array([])
+        for stage_val, name in [(2, 'n2'), (1, 'n3'), (4, 'rem'), (5, 'wake'), (3, 'n1')]:
+            stage_segments[name] = _get_stage_eeg(eeg_sig, eeg_fs, stage_signal, stage_val)
 
-    feat.update(extract_eeg_features(eeg_sig, eeg_fs, n2_eeg, n3_eeg, rem_eeg))
-    feat.update(extract_nonlinear_features(eeg_sig, eeg_fs, n2_eeg, n3_eeg))
-
-    del eeg_sig, n2_eeg, n3_eeg, rem_eeg
+    feat.update(extract_eeg_spectral_features(eeg_sig, eeg_fs, stage_segments))
+    feat.update(extract_nonlinear_features(eeg_sig, eeg_fs, stage_segments))
 
     return feat
 
@@ -571,7 +1029,7 @@ def _load_record_signals(data_folder, site_id, patient_id, session_id):
 # ============================================================
 
 def train_model(data_folder, model_folder, verbose, csv_path=DEFAULT_CSV_PATH):
-    """Train dual-model ensemble on training data."""
+    """Train 4-model ensemble on training data."""
     from sklearn.preprocessing import StandardScaler
     from sklearn.linear_model import LogisticRegression
     from sklearn.impute import SimpleImputer
@@ -630,16 +1088,6 @@ def train_model(data_folder, model_folder, verbose, csv_path=DEFAULT_CSV_PATH):
     if verbose:
         print(f'Training on {len(y)} records ({y.sum()} positive, {len(y)-y.sum()} negative)')
 
-    # Build feature matrices
-    X_a = np.array([_feat_dict_to_vector(fd, MODEL_A_FEATURES) for fd in feat_dicts])
-    X_b = np.array([_feat_dict_to_vector(fd, MODEL_B_FEATURES) for fd in feat_dicts])
-
-    X_a = _replace_inf(X_a)
-    X_b = _replace_inf(X_b)
-
-    if verbose:
-        print(f'Model A features: {X_a.shape[1]}, Model B features: {X_b.shape[1]}')
-
     def _make_pipeline(C):
         return Pipeline([
             ('imputer', SimpleImputer(strategy='median')),
@@ -647,42 +1095,35 @@ def train_model(data_folder, model_folder, verbose, csv_path=DEFAULT_CSV_PATH):
             ('lr', LogisticRegression(C=C, max_iter=1000, random_state=42, penalty='l2')),
         ])
 
-    model_a = _make_pipeline(MODEL_A_C)
-    model_a.fit(X_a, y)
+    models = {}
+    for name, feature_list in ALL_MODEL_FEATURES:
+        X = np.array([_feat_dict_to_vector(fd, feature_list) for fd in feat_dicts])
+        X = _replace_inf(X)
+        pipe = _make_pipeline(MODEL_C)
+        pipe.fit(X, y)
+        models[name] = pipe
 
-    model_b = _make_pipeline(MODEL_B_C)
-    model_b.fit(X_b, y)
-
-    if verbose:
-        print(f'Ensemble alpha = {ENSEMBLE_ALPHA} (Model A weight)')
-        print('Model A top features:')
-        coefs_a = model_a.named_steps['lr'].coef_[0]
-        for fname, c in sorted(zip(MODEL_A_FEATURES, coefs_a), key=lambda x: abs(x[1]), reverse=True)[:10]:
-            print(f'  {fname:30s} {c:+.4f}')
-        print('Model B top features:')
-        coefs_b = model_b.named_steps['lr'].coef_[0]
-        for fname, c in sorted(zip(MODEL_B_FEATURES, coefs_b), key=lambda x: abs(x[1]), reverse=True)[:10]:
-            print(f'  {fname:30s} {c:+.4f}')
+        if verbose:
+            print(f'{name}: {X.shape[1]} features')
+            coefs = pipe.named_steps['lr'].coef_[0]
+            for fname, c in sorted(zip(feature_list, coefs), key=lambda x: abs(x[1]), reverse=True)[:5]:
+                print(f'  {fname:35s} {c:+.4f}')
 
     os.makedirs(model_folder, exist_ok=True)
-    save_model(model_folder, model_a, model_b)
+    save_model(model_folder, models)
 
     if verbose:
         print('Done training.')
 
 
 def load_model(model_folder, verbose):
-    """Load the trained dual-model ensemble."""
+    """Load the trained 4-model ensemble."""
     filename = os.path.join(model_folder, 'model.sav')
     return joblib.load(filename)
 
 
 def run_model(model, record, data_folder, verbose):
-    """Run dual-model ensemble on a single record."""
-    model_a = model['model_a']
-    model_b = model['model_b']
-    alpha = model['alpha']
-
+    """Run 4-model ensemble on a single record."""
     patient_id = record[HEADERS['bids_folder']]
     site_id = record[HEADERS['site_id']]
     session_id = record[HEADERS['session_id']]
@@ -696,15 +1137,14 @@ def run_model(model, record, data_folder, verbose):
     feat_dict = extract_all_features_for_record(
         patient_data, phys_channels, phys_fs, algo_data, DEFAULT_CSV_PATH)
 
-    features_a = model.get('features_a', MODEL_A_FEATURES)
-    features_b = model.get('features_b', MODEL_B_FEATURES)
-    vec_a = _replace_inf(_feat_dict_to_vector(feat_dict, features_a))
-    vec_b = _replace_inf(_feat_dict_to_vector(feat_dict, features_b))
+    probs = []
+    for name, feature_list in ALL_MODEL_FEATURES:
+        pipe = model['models'][name]
+        vec = _replace_inf(_feat_dict_to_vector(feat_dict, feature_list))
+        prob = float(pipe.predict_proba(vec.reshape(1, -1))[0, 1])
+        probs.append(prob)
 
-    prob_a = float(model_a.predict_proba(vec_a.reshape(1, -1))[0, 1])
-    prob_b = float(model_b.predict_proba(vec_b.reshape(1, -1))[0, 1])
-
-    probability_output = alpha * prob_a + (1 - alpha) * prob_b
+    probability_output = float(np.mean(probs))
     binary_output = int(probability_output >= 0.5)
 
     return binary_output, probability_output
@@ -714,14 +1154,12 @@ def run_model(model, record, data_folder, verbose):
 # Save Helper
 # ============================================================
 
-def save_model(model_folder, model_a, model_b):
-    """Save the dual-model ensemble."""
+def save_model(model_folder, models):
+    """Save the 4-model ensemble."""
     d = {
-        'model_a': model_a,
-        'model_b': model_b,
-        'alpha': ENSEMBLE_ALPHA,
-        'features_a': MODEL_A_FEATURES,
-        'features_b': MODEL_B_FEATURES,
+        'models': models,
+        'feature_lists': {name: fl for name, fl in ALL_MODEL_FEATURES},
+        'n_models': N_MODELS,
     }
     filename = os.path.join(model_folder, 'model.sav')
     joblib.dump(d, filename, protocol=0)
