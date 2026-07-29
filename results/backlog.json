@@ -1,0 +1,110 @@
+{
+  "lgbm_sitecov": [
+    {
+      "fold": "holdout_I0002",
+      "auroc_age": 0.75,
+      "ci_low": 0.45,
+      "ci_high": 1.0,
+      "boot_sd": 0.14096083211880187,
+      "n_pairs": 48,
+      "powered": false,
+      "n": 54,
+      "n_pos": 8,
+      "n_train": 1049,
+      "reward": 1.191599999540378
+    },
+    {
+      "fold": "holdout_I0006",
+      "auroc_age": 0.673469387755102,
+      "ci_low": 0.4959304004620716,
+      "ci_high": 0.8319396798170381,
+      "boot_sd": 0.08374847737196889,
+      "n_pairs": 441,
+      "powered": false,
+      "n": 192,
+      "n_pos": 20,
+      "n_train": 911,
+      "reward": 0.5509261571172485
+    },
+    {
+      "fold": "holdout_S0001",
+      "auroc_age": 0.6453942232630757,
+      "ci_low": 0.5483075063328322,
+      "ci_high": 0.7374840753222627,
+      "boot_sd": 0.04794958050922902,
+      "n_pairs": 5124,
+      "powered": true,
+      "n": 857,
+      "n_pos": 56,
+      "n_train": 246,
+      "reward": 0.13533794726462073
+    },
+    {
+      "fold": "train_S0001_only",
+      "auroc_age": 0.729456384323641,
+      "ci_low": 0.5859031608894176,
+      "ci_high": 0.8546159217518218,
+      "boot_sd": 0.06925983735933902,
+      "n_pairs": 791,
+      "powered": false,
+      "n": 246,
+      "n_pos": 28,
+      "n_train": 857,
+      "reward": 0.6878840066582613
+    }
+  ],
+  "lgbm": [
+    {
+      "fold": "holdout_I0002",
+      "auroc_age": 0.75,
+      "ci_low": 0.45,
+      "ci_high": 1.0,
+      "boot_sd": 0.14096083211880187,
+      "n_pairs": 48,
+      "powered": false,
+      "n": 54,
+      "n_pos": 8,
+      "n_train": 1049,
+      "reward": 1.1274173886566958
+    },
+    {
+      "fold": "holdout_I0006",
+      "auroc_age": 0.6031746031746031,
+      "ci_low": 0.43896103896103894,
+      "ci_high": 0.7500750428816463,
+      "boot_sd": 0.08004219204242571,
+      "n_pairs": 441,
+      "powered": false,
+      "n": 192,
+      "n_pos": 20,
+      "n_train": 911,
+      "reward": 0.04090740269112973
+    },
+    {
+      "fold": "holdout_S0001",
+      "auroc_age": 0.6664715066354411,
+      "ci_low": 0.5657920629967265,
+      "ci_high": 0.7576328202951909,
+      "boot_sd": 0.049917896329734,
+      "n_pairs": 5124,
+      "powered": true,
+      "n": 857,
+      "n_pos": 56,
+      "n_train": 246,
+      "reward": 0.30547794610175016
+    },
+    {
+      "fold": "train_S0001_only",
+      "auroc_age": 0.729456384323641,
+      "ci_low": 0.5859031608894176,
+      "ci_high": 0.8546159217518218,
+      "boot_sd": 0.06925983735933902,
+      "n_pairs": 791,
+      "powered": false,
+      "n": 246,
+      "n_pos": 28,
+      "n_train": 857,
+      "reward": 0.6878840066582613
+    }
+  ]
+}

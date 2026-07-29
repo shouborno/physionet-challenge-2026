@@ -75,10 +75,12 @@ def main():
     if 'CreationTime' in demo.columns:
         t = pd.to_datetime(demo['CreationTime'], format='mixed', errors='coerce')
         demo['rec_year'] = t.dt.year + t.dt.dayofyear / 366.0
-        demo['rec_month'] = t.dt.month
 
     keep = ['BidsFolder', 'SessionID', 'Age', 'Sex', 'label']
-    keep += [c for c in ['rec_year', 'rec_month'] if c in demo.columns]
+    # Year only. Month was measured and costs 0.011 on the powered fold: the
+    # artifact runs through follow-up duration, which is annual, so month is
+    # seasonal noise with no mechanism behind it.
+    keep += [c for c in ['rec_year'] if c in demo.columns]
     keep += [c for c in ['Time_to_Event', 'Time_to_Last_Visit'] if c in demo.columns]
     merged = df.merge(
         demo[keep].rename(columns={'BidsFolder': 'patient_id',

@@ -121,6 +121,71 @@ def make_clogit_fit(alpha=1.0, width=4.0, n_offsets=4):
     return fit_predict
 
 
+def make_tabpfn_fit(n_components=300):
+    """TabPFN v2 with in-fold PCA to respect its feature limit.
+
+    TabPFN is a prior-fitted transformer designed for small tabular problems,
+    the regime with the strongest published edge at roughly our sample size. It
+    caps at about 500 features and we now carry 953, so dimensionality has to
+    come down. PCA rather than feature selection: it is unsupervised, so it
+    cannot leak the label, whereas supervised selection over 953 columns at 62
+    effective positives is the exact mechanism that produced the 0.136 optimism
+    gap in the unofficial phase.
+    """
+    from sklearn.decomposition import PCA
+    from sklearn.impute import SimpleImputer
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import StandardScaler
+
+    def fit_predict(X_tr, y_tr, sites_tr, ages_tr, X_te, ages_te):
+        from tabpfn import TabPFNClassifier
+        pre = Pipeline([
+            ('imputer', SimpleImputer(strategy='median')),
+            ('scaler', StandardScaler()),
+            ('pca', PCA(n_components=min(n_components, X_tr.shape[1],
+                                         X_tr.shape[0] - 1), random_state=42)),
+        ])
+        Ztr = pre.fit_transform(X_tr)
+        Zte = pre.transform(X_te)
+        clf = TabPFNClassifier(device='cpu', random_state=42)
+        clf.fit(Ztr, y_tr.astype(int))
+        return clf.predict_proba(Zte)[:, 1]
+
+    return fit_predict
+
+
+def make_site_covariate_fit(estimator_factory):
+    """Include site as a model input, with an unknown-site code at inference.
+
+    Removing site failed here three ways (ComBat, rank normalization, filtering
+    site-predictive features), and there is a theoretical reason: driving the
+    feature-marginal divergence to zero leaves error floored by the divergence
+    between label marginals, which is real since site prevalence runs 6.5% to
+    14.8%. The recommended alternative is to model site rather than subtract it.
+    Held-out folds see an unseen code, which is exactly the inference condition.
+    """
+    from sklearn.impute import SimpleImputer
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import StandardScaler
+
+    def fit_predict(X_tr, y_tr, sites_tr, ages_tr, X_te, ages_te):
+        codes = {s: i for i, s in enumerate(sorted(pd.unique(sites_tr)))}
+        unknown = len(codes)
+        tr = np.column_stack([X_tr, [codes[s] for s in sites_tr]])
+        # Every test record is from an unseen site under leave-one-site-out,
+        # matching how the model will be used.
+        te = np.column_stack([X_te, np.full(len(X_te), unknown)])
+        pipe = Pipeline([
+            ('imputer', SimpleImputer(strategy='median')),
+            ('scaler', StandardScaler()),
+            ('model', estimator_factory()),
+        ])
+        pipe.fit(tr, y_tr)
+        return pipe.predict_proba(te)[:, 1]
+
+    return fit_predict
+
+
 def constant_age_fit(X_tr, y_tr, sites_tr, ages_tr, X_te, ages_te):
     """Age as the only predictor: the floor the metric is designed to remove."""
     return ages_te
@@ -147,6 +212,8 @@ def build_candidates(n_features):
 
     candidates = {
         'age_only': constant_age_fit,
+        'lgbm_sitecov': make_site_covariate_fit(gbm),
+        'tabpfn_pca300': make_tabpfn_fit(300),
         'lgbm_matchedw': make_sklearn_fit(gbm, matched_weights=True),
         'lgbm_matchedw_t075': make_sklearn_fit(gbm, matched_weights=True, temper=0.75),
         'lgbm_matchedw_t05': make_sklearn_fit(gbm, matched_weights=True, temper=0.5),
