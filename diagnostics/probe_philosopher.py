@@ -41,6 +41,9 @@ def main():
         return 1
     n_params = sum(p.numel() for p in model.parameters())
     print(f'loaded in {time.time() - t:.1f}s  params={n_params / 1e6:.1f}M')
+    print(f'targets={len(getattr(model, "target_names", []))} '
+          f'task_types={set(getattr(model, "task_types", []))} '
+          f'heads={len(getattr(model, "heads", {}))}')
     print(f'training mode (must be True): {model.training}')
 
     print('\n--- real Challenge record ---')
@@ -96,7 +99,7 @@ def main():
     for pin in (False, True):
         t = time.time()
         try:
-            latent, reg, clf = ps.infer_latent(
+            latent, heads = ps.infer_latent(
                 model, specs, row['Age'], ps.sex_to_numeric(row['Sex']),
                 device=device, pin_age=pin)
         except Exception:
@@ -107,7 +110,8 @@ def main():
         print(f'  latent {latent.shape} '
               f'mean={latent.mean():.4f} sd={latent.std():.4f} '
               f'nonzero={np.count_nonzero(latent)}')
-        print(f'  regression head {reg.shape}, classification head {clf.shape}')
+        print(f'  {len(heads)} head outputs; sample: '
+              f'{ {k: round(float(np.ravel(v)[0]), 4) for k, v in list(heads.items())[:4]} }')
 
     print('\nPROBE OK')
     return 0
