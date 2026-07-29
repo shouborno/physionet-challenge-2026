@@ -1,0 +1,17 @@
+# Data and derived artifacts. Anchored to the repo root so src/data/ stays tracked.
+/data/
+/results/
+/saved_models/
+/slurm/logs/
+
+# Vendored third-party code and large checkpoints
+/external/
+/ignore/
+/.devnotes/
+
+# Build and editor noise
+__pycache__/
+*.pyc
+*.aux
+*.log
+*.out

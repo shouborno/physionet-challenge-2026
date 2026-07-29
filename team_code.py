@@ -15,6 +15,7 @@ LOSO CV: Mean AUROC ~0.780, worst-site ~0.672
 import joblib
 import numpy as np
 import os
+import pandas as pd
 import warnings
 from collections import OrderedDict
 
@@ -928,10 +929,13 @@ def extract_all_features_for_record(patient_data, phys_channels, phys_fs,
     feat = OrderedDict()
 
     # 1. Demographics
+    # load_age/load_bmi return NaN (not 0.0) for missing values in the current
+    # helper_code; keep the NaN so the imputer handles it rather than letting a
+    # 0-year-old patient through.
     feat['age'] = float(load_age(patient_data))
     sex = load_sex(patient_data)
     feat['sex_female'] = 1.0 if sex == 'Female' else 0.0
-    race = get_standardized_race(patient_data).lower()
+    race = load_race(patient_data).lower()
     feat['race_unavail'] = 1.0 if race == 'unavailable' else 0.0
 
     # 2. Standardize channels and derive bipolar signals
@@ -1018,6 +1022,103 @@ def _feat_dict_to_vector(feat_dict, feature_list):
     return np.array([feat_dict.get(f, np.nan) for f in feature_list], dtype=np.float64)
 
 
+# ------------------------------------------------------------
+# Cached demographics access
+#
+# helper_code.load_demographics and load_diagnoses each re-read the whole
+# demographics CSV on every call, which is two full parses per record (13,200
+# on the large training set). These read it once and serve from memory with
+# identical semantics.
+# ------------------------------------------------------------
+
+_DEMO_CACHE = {}
+
+
+def _demo_tables(metadata_file):
+    """Parse the demographics CSV once and index it for lookup."""
+    key = os.path.abspath(metadata_file)
+    if key not in _DEMO_CACHE:
+        df = pd.read_csv(key)
+        by_record = {}
+        for row in df.to_dict('records'):
+            by_record[(row.get(HEADERS['bids_folder']),
+                       row.get(HEADERS['session_id']))] = row
+        by_patient = {}
+        for row in df.to_dict('records'):
+            by_patient.setdefault(row.get(HEADERS['bids_folder']), row)
+        _DEMO_CACHE[key] = (df, by_record, by_patient)
+    return _DEMO_CACHE[key]
+
+
+def _cached_demographics(metadata_file, patient_id, session_id):
+    """Cached equivalent of helper_code.load_demographics."""
+    _, by_record, _ = _demo_tables(metadata_file)
+    return by_record.get((patient_id, session_id), {})
+
+
+def _cached_label(metadata_file, patient_id):
+    """Cached equivalent of helper_code.load_diagnoses; returns None if unusable.
+
+    load_diagnoses raises for a missing patient or a missing label. During
+    training we want to skip those records rather than abort, so this returns
+    None instead.
+    """
+    _, _, by_patient = _demo_tables(metadata_file)
+    row = by_patient.get(patient_id)
+    if row is None:
+        return None
+    val = row.get(HEADERS['label'])
+    if val is None or (isinstance(val, float) and np.isnan(val)):
+        return None
+    if isinstance(val, str):
+        text = val.casefold().strip()
+        if text in ('true', '1', '1.0'):
+            return 1
+        if text in ('false', '0', '0.0'):
+            return 0
+        return None
+    if isinstance(val, (bool, np.bool_)):
+        return int(val)
+    try:
+        return 1 if float(val) else 0
+    except (TypeError, ValueError):
+        return None
+
+
+# ------------------------------------------------------------
+# Age-conditioned prevalence (secondary reward metric)
+#
+# The organizers compute the prevalence of the positive class at each age from
+# the training set, within a +/- 2 year window, flooring the numerator at 0.5.
+# We replicate that here so the binary decision threshold matches the metric.
+# ------------------------------------------------------------
+
+PREVALENCE_GAP = 2
+TARGET_PREVALENCE = 0.10  # midpoint of the stated 5-15% for validation/test
+
+
+def _prevalence_at_age(age, prev_ages, prev_labels, gap=PREVALENCE_GAP):
+    """Empirical positive-class prevalence among training patients near `age`."""
+    if not np.isfinite(age) or len(prev_ages) == 0:
+        return TARGET_PREVALENCE
+    window = np.abs(prev_ages - age) <= gap
+    n = int(window.sum())
+    if n == 0:
+        return TARGET_PREVALENCE
+    return max(float(prev_labels[window].sum()), 0.5) / n
+
+
+def _shift_prior(q, prior_train, prior_target=TARGET_PREVALENCE):
+    """Re-calibrate a posterior from the training prevalence to the target one."""
+    if not np.isfinite(q) or prior_train <= 0 or prior_train >= 1:
+        return q
+    pos = q * (prior_target / prior_train)
+    neg = (1.0 - q) * ((1.0 - prior_target) / (1.0 - prior_train))
+    if pos + neg <= 0:
+        return q
+    return pos / (pos + neg)
+
+
 def _load_record_signals(data_folder, site_id, patient_id, session_id):
     """Load physiological and algorithmic annotation signals for a record."""
     phys_file = os.path.join(data_folder, PHYSIOLOGICAL_DATA_SUBFOLDER,
@@ -1041,13 +1142,44 @@ def _load_record_signals(data_folder, site_id, patient_id, session_id):
 # Required Functions
 # ============================================================
 
+def _extract_one(data_folder, record, demo_file, csv_path):
+    """Extract features and label for a single record.
+
+    Returns (feature_dict, label, age) or None if the record is unusable. Runs
+    in a worker process, so it must not touch module-level mutable state beyond
+    the read-through demographics cache.
+    """
+    try:
+        patient_id = record[HEADERS['bids_folder']]
+        site_id = record[HEADERS['site_id']]
+        session_id = record[HEADERS['session_id']]
+
+        label = _cached_label(demo_file, patient_id)
+        if label not in (0, 1):
+            return None
+
+        patient_data = _cached_demographics(demo_file, patient_id, session_id)
+
+        phys_channels, phys_fs, algo_data = _load_record_signals(
+            data_folder, site_id, patient_id, session_id)
+
+        fd = extract_all_features_for_record(
+            patient_data, phys_channels, phys_fs, algo_data, csv_path)
+
+        age = float(load_age(patient_data))
+
+        del phys_channels, algo_data
+        return fd, label, age
+    except Exception:
+        return None
+
+
 def train_model(data_folder, model_folder, verbose, csv_path=DEFAULT_CSV_PATH):
     """Train single LR model on training data."""
     from sklearn.preprocessing import StandardScaler
     from sklearn.linear_model import LogisticRegression
     from sklearn.impute import SimpleImputer
     from sklearn.pipeline import Pipeline
-    from tqdm import tqdm
 
     if verbose:
         print('Finding the Challenge data...')
@@ -1062,64 +1194,74 @@ def train_model(data_folder, model_folder, verbose, csv_path=DEFAULT_CSV_PATH):
     if verbose:
         print(f'Extracting features from {num_records} records...')
 
-    feat_dicts = []
-    labels = []
+    demo_file = patient_data_file
 
-    pbar = tqdm(range(num_records), desc="Extracting", unit="rec", disable=not verbose)
-    for i in pbar:
+    # Extract in parallel where possible. Signals dominate memory, so keep the
+    # worker count modest against the 60 GiB the evaluation container allows.
+    n_jobs = max(1, min(8, (os.cpu_count() or 1) - 1))
+    results = None
+    if n_jobs > 1:
         try:
-            record = patient_metadata_list[i]
-            patient_id = record[HEADERS['bids_folder']]
-            site_id = record[HEADERS['site_id']]
-            session_id = record[HEADERS['session_id']]
-
-            demo_file = os.path.join(data_folder, DEMOGRAPHICS_FILE)
-            patient_data = load_demographics(demo_file, patient_id, session_id)
-
-            label = load_diagnoses(demo_file, patient_id)
-            if label != 0 and label != 1:
-                continue
-
-            phys_channels, phys_fs, algo_data = _load_record_signals(
-                data_folder, site_id, patient_id, session_id)
-
-            fd = extract_all_features_for_record(
-                patient_data, phys_channels, phys_fs, algo_data, csv_path)
-            feat_dicts.append(fd)
-            labels.append(label)
-
-            del phys_channels, algo_data
-
-        except Exception as e:
+            from joblib import Parallel, delayed
+            results = Parallel(n_jobs=n_jobs, verbose=10 if verbose else 0)(
+                delayed(_extract_one)(data_folder, rec, demo_file, csv_path)
+                for rec in patient_metadata_list
+            )
+        except Exception as exc:
             if verbose:
-                tqdm.write(f"  Error on record {i}: {e}")
-            continue
+                print(f'Parallel extraction failed ({exc}); falling back to serial.')
+            results = None
 
-    pbar.close()
+    if results is None:
+        results = []
+        for i, rec in enumerate(patient_metadata_list):
+            if verbose and i % 50 == 0:
+                print(f'  {i}/{num_records}')
+            results.append(_extract_one(data_folder, rec, demo_file, csv_path))
 
-    y = np.array(labels, dtype=int)
+    results = [r for r in results if r is not None]
+    if not results:
+        raise RuntimeError('No records could be processed.')
+
+    feat_dicts = [r[0] for r in results]
+    y = np.array([r[1] for r in results], dtype=int)
+    ages = np.array([r[2] for r in results], dtype=float)
+
     if verbose:
-        print(f'Training on {len(y)} records ({y.sum()} positive, {len(y)-y.sum()} negative)')
+        print(f'Training on {len(y)} records '
+              f'({y.sum()} positive, {len(y) - y.sum()} negative)')
 
-    X = np.array([_feat_dict_to_vector(fd, SELECTED_FEATURES) for fd in feat_dicts])
-    X = _replace_inf(X)
+    X = _replace_inf(
+        np.array([_feat_dict_to_vector(fd, SELECTED_FEATURES) for fd in feat_dicts]))
 
-    pipe = Pipeline([
-        ('imputer', SimpleImputer(strategy='median')),
-        ('scaler', StandardScaler()),
-        ('lr', LogisticRegression(C=MODEL_C, max_iter=1000, random_state=42, penalty='l2')),
-    ])
-    pipe.fit(X, y)
+    prior_train = float(y.mean()) if len(y) else TARGET_PREVALENCE
 
-    if verbose:
-        print(f'Model: {X.shape[1]} features')
-        coefs = pipe.named_steps['lr'].coef_[0]
-        for fname, c in sorted(zip(SELECTED_FEATURES, coefs),
-                                key=lambda x: abs(x[1]), reverse=True)[:10]:
-            print(f'  {fname:35s} {c:+.4f}')
+    # The organizers stress-test with modified training sets, including ones
+    # with a class removed. A single-class fit is impossible, so fall back to a
+    # constant prior-only predictor rather than crashing.
+    if len(np.unique(y)) < 2:
+        if verbose:
+            print('Only one class present; saving a prior-only predictor.')
+        pipe = None
+    else:
+        pipe = Pipeline([
+            ('imputer', SimpleImputer(strategy='median')),
+            ('scaler', StandardScaler()),
+            ('lr', LogisticRegression(C=MODEL_C, max_iter=1000,
+                                      random_state=42, penalty='l2')),
+        ])
+        pipe.fit(X, y)
+
+        if verbose:
+            print(f'Model: {X.shape[1]} features')
+            coefs = pipe.named_steps['lr'].coef_[0]
+            for fname, c in sorted(zip(SELECTED_FEATURES, coefs),
+                                   key=lambda x: abs(x[1]), reverse=True)[:10]:
+                print(f'  {fname:35s} {c:+.4f}')
 
     os.makedirs(model_folder, exist_ok=True)
-    save_model(model_folder, pipe)
+    save_model(model_folder, pipe, prior_train=prior_train,
+               prev_ages=ages, prev_labels=y.astype(float))
 
     if verbose:
         print('Done training.')
@@ -1132,24 +1274,53 @@ def load_model(model_folder, verbose):
 
 
 def run_model(model, record, data_folder, verbose):
-    """Run single LR model on a record."""
-    patient_id = record[HEADERS['bids_folder']]
-    site_id = record[HEADERS['site_id']]
-    session_id = record[HEADERS['session_id']]
+    """Run the trained model on a record.
 
-    demo_file = os.path.join(data_folder, DEMOGRAPHICS_FILE)
-    patient_data = load_demographics(demo_file, patient_id, session_id)
+    Returns (binary_output, probability_output) as plain Python scalars; the
+    Challenge run_model.py asserts on these types. Any failure yields a
+    negative prediction rather than aborting the whole run.
+    """
+    prior_train = model.get('prior_train', TARGET_PREVALENCE)
+    prev_ages = model.get('prev_ages', np.array([]))
+    prev_labels = model.get('prev_labels', np.array([]))
+    pipe = model.get('pipeline')
 
-    phys_channels, phys_fs, algo_data = _load_record_signals(
-        data_folder, site_id, patient_id, session_id)
+    try:
+        patient_id = record[HEADERS['bids_folder']]
+        site_id = record[HEADERS['site_id']]
+        session_id = record[HEADERS['session_id']]
 
-    feat_dict = extract_all_features_for_record(
-        patient_data, phys_channels, phys_fs, algo_data, DEFAULT_CSV_PATH)
+        demo_file = os.path.join(data_folder, DEMOGRAPHICS_FILE)
+        patient_data = _cached_demographics(demo_file, patient_id, session_id)
+        age = float(load_age(patient_data))
 
-    pipe = model['pipeline']
-    vec = _replace_inf(_feat_dict_to_vector(feat_dict, SELECTED_FEATURES))
-    probability_output = float(pipe.predict_proba(vec.reshape(1, -1))[0, 1])
-    binary_output = int(probability_output >= 0.5)
+        if pipe is None:
+            probability_output = float(prior_train)
+        else:
+            phys_channels, phys_fs, algo_data = _load_record_signals(
+                data_folder, site_id, patient_id, session_id)
+            feat_dict = extract_all_features_for_record(
+                patient_data, phys_channels, phys_fs, algo_data, DEFAULT_CSV_PATH)
+            vec = _replace_inf(_feat_dict_to_vector(feat_dict, SELECTED_FEATURES))
+            probability_output = float(pipe.predict_proba(vec.reshape(1, -1))[0, 1])
+            del phys_channels, algo_data
+    except Exception as exc:
+        if verbose:
+            print(f'  run_model failed ({exc}); returning a negative prediction.')
+        return 0, 0.0
+
+    if not np.isfinite(probability_output):
+        probability_output = 0.0
+    probability_output = float(min(max(probability_output, 0.0), 1.0))
+
+    # Secondary reward metric: with reward 1/p-1 for a true positive, 1/(1-p)-1
+    # for a true negative and -1 otherwise, the expected-reward-optimal rule is
+    # to predict positive exactly when the calibrated posterior exceeds the
+    # local age prevalence p_a. Calibrate to the target prevalence first, since
+    # the training set is far more balanced than validation/test.
+    q = _shift_prior(probability_output, prior_train, TARGET_PREVALENCE)
+    p_a = _prevalence_at_age(age, prev_ages, prev_labels)
+    binary_output = int(q > p_a)
 
     return binary_output, probability_output
 
@@ -1158,11 +1329,20 @@ def run_model(model, record, data_folder, verbose):
 # Save Helper
 # ============================================================
 
-def save_model(model_folder, pipeline):
-    """Save the trained model."""
+def save_model(model_folder, pipeline, prior_train=TARGET_PREVALENCE,
+               prev_ages=None, prev_labels=None):
+    """Save the trained model plus what the decision threshold needs.
+
+    prev_ages/prev_labels are the training ages and labels; they reproduce the
+    organizers' age-conditioned prevalence at inference time, when the training
+    demographics are no longer on disk.
+    """
     d = {
         'pipeline': pipeline,
         'features': SELECTED_FEATURES,
+        'prior_train': float(prior_train),
+        'prev_ages': np.asarray(prev_ages if prev_ages is not None else [], dtype=float),
+        'prev_labels': np.asarray(prev_labels if prev_labels is not None else [], dtype=float),
     }
     filename = os.path.join(model_folder, 'model.sav')
-    joblib.dump(d, filename, protocol=0)
+    joblib.dump(d, filename)
