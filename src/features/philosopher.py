@@ -124,8 +124,17 @@ def age_z(age, pin_to_cohort_mean=False):
 
 
 def infer_latent(model, specs, age_value, sex_value, device='cuda',
-                 pin_age=False):
-    """Return (latent[1024], regression head, classification head)."""
+                 pin_age=False, want_heads=True):
+    """Return (latent[1024], head_outputs dict).
+
+    Bypasses `forward()` deliberately. That method ends with
+    `torch.cat(yp_classification)`, and this checkpoint loads with no
+    classification entries in `task_types`, so the concatenation raises on an
+    empty list. This is the failure that stalled the track in March: a head
+    assembly bug, not an environment problem. The latent is produced before
+    that line, so calling stem -> maxvit -> final latent space reaches it
+    directly, and skipping the sleep-stage decoder makes it cheaper too.
+    """
     import torch
 
     x = torch.tensor(specs, dtype=torch.float32).unsqueeze(0).unsqueeze(0).to(device)
@@ -133,13 +142,22 @@ def infer_latent(model, specs, age_value, sex_value, device='cuda',
                        dtype=torch.float32).to(device)
 
     with torch.no_grad():
-        yp_reg, yp_clf, _yp_stage, latent = model(x, cov, return_features_lhl=True)
+        x1, x2, x3, h = model.stem(x)
+        h = model.forward_maxvit(h)
+        latent = model.forward_final_latent_space(h, cov)
 
-    out = (latent.squeeze(0).float().cpu().numpy(),
-           yp_reg.squeeze(0).float().cpu().numpy(),
-           yp_clf.squeeze(0).float().cpu().numpy())
-    del x, cov
-    return out
+        heads = {}
+        if want_heads:
+            for name, head in model.heads.items():
+                try:
+                    heads[name.replace('final_head_', '')] = (
+                        head(latent).squeeze(0).float().cpu().numpy())
+                except Exception:  # noqa: BLE001 - a broken head must not
+                    continue      # cost us the latent
+
+    out = latent.squeeze(0).float().cpu().numpy()
+    del x, cov, h, x1, x2, x3
+    return out, heads
 
 
 def sex_to_numeric(sex):
