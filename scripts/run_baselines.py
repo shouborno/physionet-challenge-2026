@@ -254,6 +254,8 @@ def main():
     parser.add_argument('--out', default='results/baselines.json')
     parser.add_argument('--only', nargs='*', default=None)
     parser.add_argument('--n-boot', type=int, default=2000)
+    parser.add_argument('--drop-cols', nargs='*', default=None,
+                        help='additional feature columns to exclude')
     parser.add_argument('--drop-age', action='store_true',
                         help='exclude age as a model input; it still drives the '
                              'metric and the decision threshold')
@@ -270,6 +272,16 @@ def main():
         # and the worst powered fold improves by 0.025 once it is removed.
         feature_cols = [c for c in feature_cols if c != 'age']
         print('dropping age from model inputs')
+    if args.drop_cols:
+        # BMI is 75.9% missing and whether it was recorded is a
+        # healthcare-contact proxy that does not transfer: at S0001 prevalence
+        # is 36.9% when present against 3.2% when absent, while I0006 shows
+        # nothing. Making the missingness explicit collapsed the inverted fold
+        # from 0.697 to 0.574.
+        before = len(feature_cols)
+        feature_cols = [c for c in feature_cols if c not in set(args.drop_cols)]
+        print(f'dropping {before - len(feature_cols)} column(s): '
+              f'{sorted(set(args.drop_cols))}')
     X = df[feature_cols].to_numpy(dtype=float)
     y = df['label'].to_numpy(dtype=float)
     sites = df['site_id'].to_numpy()
