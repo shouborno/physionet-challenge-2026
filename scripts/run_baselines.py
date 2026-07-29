@@ -39,7 +39,7 @@ META = {'patient_id', 'site_id', 'session_id', 'label', 'extract_time_sec',
 
 
 def make_sklearn_fit(estimator_factory, residualize=False, standardize=False,
-                     site_balanced=False):
+                     site_balanced=False, matched_weights=False, temper=1.0):
     """Wrap a scikit-learn estimator as a fit_predict for the protocol."""
     from sklearn.impute import SimpleImputer
     from sklearn.pipeline import Pipeline
@@ -57,13 +57,24 @@ def make_sklearn_fit(estimator_factory, residualize=False, standardize=False,
         ])
 
         kwargs = {}
+        weights = None
+        if matched_weights:
+            # Weight each subject by its count of eligible opposite-class
+            # partners inside the 2-year caliper: the per-stratum balancing
+            # that makes a pointwise logistic model AUC-consistent with
+            # constant 2 rather than ~10 at 7.6% prevalence.
+            from src.models.matched_weights import matched_pair_weights
+            weights = matched_pair_weights(y_tr, ages_tr, temper=temper)
         if site_balanced:
             # Weight each site equally. The dominant site holds ~78% of records
             # and would otherwise define the fit on its own; this is most of
             # what group DRO buys, without the implementation risk.
             counts = pd.Series(sites_tr).value_counts()
             w = np.array([1.0 / counts[s] for s in sites_tr])
-            kwargs['model__sample_weight'] = w / w.mean()
+            w = w / w.mean()
+            weights = w if weights is None else weights * w
+        if weights is not None:
+            kwargs['model__sample_weight'] = weights / weights.mean()
 
         pipe.fit(X_tr, y_tr, **kwargs)
         scores = pipe.predict_proba(X_te)[:, 1]
@@ -136,6 +147,11 @@ def build_candidates(n_features):
 
     candidates = {
         'age_only': constant_age_fit,
+        'lgbm_matchedw': make_sklearn_fit(gbm, matched_weights=True),
+        'lgbm_matchedw_t075': make_sklearn_fit(gbm, matched_weights=True, temper=0.75),
+        'lgbm_matchedw_t05': make_sklearn_fit(gbm, matched_weights=True, temper=0.5),
+        'lgbm_matchedw_siteb': make_sklearn_fit(gbm, matched_weights=True,
+                                                site_balanced=True),
         'lr_C0.005_shipped': make_sklearn_fit(lr(0.005)),
         'lr_C0.005_siteweighted': make_sklearn_fit(lr(0.005), site_balanced=True),
         'lr_C0.005_ageresid': make_sklearn_fit(lr(0.005), residualize=True),
