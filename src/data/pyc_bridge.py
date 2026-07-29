@@ -26,6 +26,7 @@ import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _SRC = os.path.dirname(_HERE)
+_REPO_ROOT = os.path.dirname(_SRC)
 _CACHE_DIR = os.path.join(_HERE, '__pycache__')
 
 # `features.py` is an orchestrator that imports the others as `data.<name>`, so
@@ -47,6 +48,26 @@ TRAINING_MODULES = ['stacking']
 def _pyc_path(name, subdir=None):
     base = os.path.join(_SRC, subdir, '__pycache__') if subdir else _CACHE_DIR
     return os.path.join(base, f'{name}.cpython-311.pyc')
+
+
+def _install_helper_shims():
+    """Restore helper_code names the bytecode was compiled against.
+
+    The research modules predate the July upstream, which renamed
+    get_standardized_race/ethnicity to load_race/load_ethnicity. helper_code.py
+    is vendored verbatim and must not be edited, so the aliases are injected
+    into its namespace at import time instead. This affects the research path
+    only; team_code.py calls load_race directly.
+    """
+    import helper_code
+
+    aliases = {
+        'get_standardized_race': 'load_race',
+        'get_standardized_ethnicity': 'load_ethnicity',
+    }
+    for old, new in aliases.items():
+        if not hasattr(helper_code, old) and hasattr(helper_code, new):
+            setattr(helper_code, old, getattr(helper_code, new))
 
 
 def _load_one(name, path):
@@ -74,6 +95,10 @@ def load_feature_modules(include_training=False):
 
     if _SRC not in sys.path:
         sys.path.insert(0, _SRC)
+    if _REPO_ROOT not in sys.path:
+        sys.path.insert(0, _REPO_ROOT)
+
+    _install_helper_shims()
 
     # `features.py` does `from data.features_caisr import ...`, so a stub
     # package named `data` must exist for those imports to resolve.
