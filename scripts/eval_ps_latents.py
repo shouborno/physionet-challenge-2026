@@ -166,6 +166,32 @@ def main():
     r2p = 1 - np.sum((ages - age_hat_pin) ** 2) / np.sum((ages - ages.mean()) ** 2)
     print(f'age recoverable from the pinned latent  : R^2={r2p:.3f}')
 
+    # Does the latent encode the recording site rather than the pathology?
+    # Zare (arXiv 2607.24519) found dataset identity decoding from EEG
+    # foundation-model embeddings at AUROC 1.000 while diagnosis decoded at
+    # 0.528, which is the failure mode that matters most for a challenge scored
+    # entirely on unseen sites. Compared against the hand-crafted features on
+    # the same split so the numbers mean something relative to each other.
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.impute import SimpleImputer
+
+    print('\nsite decodability (multinomial accuracy, 5-fold; '
+          f'chance = {pd.Series(sites).value_counts(normalize=True).max():.3f})')
+    for name, M in (('PS latent (true age)', L_true),
+                    ('PS latent (pinned)', L_pin),
+                    ('hand features', X_hand)):
+        clf = make_pipeline(SimpleImputer(strategy='median'), StandardScaler(),
+                            LogisticRegression(max_iter=2000, C=1.0))
+        pred = cross_val_predict(clf, M, sites, cv=5)
+        acc = float((pred == sites).mean())
+        print(f'   {name:22s} {acc:.4f}')
+        if name.startswith('PS latent (true'):
+            site_acc_ps = acc
+        elif name.startswith('hand'):
+            site_acc_hand = acc
+
     candidates = {
         'hand_only_lgbm': (X_hand, lgbm_fit()),
         'ps_true_ridge': (L_true, ridge_fit()),
@@ -231,6 +257,8 @@ def main():
     with open(args.out, 'w') as fh:
         json.dump({'folds': results,
                    'age_r2_true': float(r2), 'age_r2_pinned': float(r2p),
+                   'site_acc_ps': float(site_acc_ps),
+                   'site_acc_hand': float(site_acc_hand),
                    'gates': {'g1': bool(g1), 'g2': bool(g2)}},
                   fh, indent=2, default=float)
     print(f'\nwrote {args.out}')

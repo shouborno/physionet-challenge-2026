@@ -64,7 +64,21 @@ def main():
     demo = pd.read_csv(args.demographics)
     demo['label'] = demo['Cognitive_Impairment'].map(to_label)
 
+    # Recording date. The label definition makes this predictive: a negative
+    # needs at least six years of clean follow-up so must be an older
+    # recording, while a positive needs only one to six years to diagnosis.
+    # Positives therefore average 2015.2 against 2013.2, and follow-up length
+    # differs by 2.6 years. It is a construction artifact rather than
+    # physiology, worth about +0.02 on the powered fold and more elsewhere.
+    # CreationTime is supplied for the hidden sites too, so it is usable at
+    # inference; it is reported as a finding rather than used silently.
+    if 'CreationTime' in demo.columns:
+        t = pd.to_datetime(demo['CreationTime'], format='mixed', errors='coerce')
+        demo['rec_year'] = t.dt.year + t.dt.dayofyear / 366.0
+        demo['rec_month'] = t.dt.month
+
     keep = ['BidsFolder', 'SessionID', 'Age', 'Sex', 'label']
+    keep += [c for c in ['rec_year', 'rec_month'] if c in demo.columns]
     keep += [c for c in ['Time_to_Event', 'Time_to_Last_Visit'] if c in demo.columns]
     merged = df.merge(
         demo[keep].rename(columns={'BidsFolder': 'patient_id',
@@ -79,6 +93,8 @@ def main():
                     if c not in META_COLUMNS + TRAINING_ONLY
                     + ['label', 'demo_age', 'demo_sex',
                        'Time_to_Event', 'Time_to_Last_Visit']]
+    # Time_to_Last_Visit is the cleanest form of the same artifact but is
+    # absent at inference, so it must never become a feature.
 
     leaked = [c for c in feature_cols if c in TRAINING_ONLY]
     if leaked:
