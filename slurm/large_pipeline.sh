@@ -27,7 +27,8 @@ FEATS=data/processed/features_large_v7.pkl
 FEATS_V8=data/processed/features_large_v8.pkl
 FEATS_V9=data/processed/features_large_v9.pkl
 
-BAD=$(cat /tmp/pn26_bad_nodes.txt 2>/dev/null || echo "")
+# Persistent: /tmp does not survive between sessions.
+BAD=$(cat "$PROJECT/configs/bad_nodes.txt" 2>/dev/null || echo "")
 EXCLUDE=${BAD:+--exclude=$BAD}
 WAIT_FOR="${1:-}"
 DEP=${WAIT_FOR:+--dependency=afterok:$WAIT_FOR}
