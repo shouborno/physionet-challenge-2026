@@ -21,16 +21,18 @@ cd "$PROJECT" || exit 1
 
 DATA=/scratch/simran/pn26/raw/training_set_large
 PARTS=/scratch/simran/pn26/processed/large_v7_parts
+COH=/scratch/simran/pn26/processed/coh_large
 PS_OUT=/scratch/simran/pn26/processed/ps_large
 FEATS=data/processed/features_large_v7.pkl
 FEATS_V8=data/processed/features_large_v8.pkl
+FEATS_V9=data/processed/features_large_v9.pkl
 
 BAD=$(cat /tmp/pn26_bad_nodes.txt 2>/dev/null || echo "")
 EXCLUDE=${BAD:+--exclude=$BAD}
 WAIT_FOR="${1:-}"
 DEP=${WAIT_FOR:+--dependency=afterok:$WAIT_FOR}
 
-mkdir -p "$PARTS" "$PS_OUT" slurm/logs
+mkdir -p "$PARTS" "$COH" "$PS_OUT" slurm/logs
 
 if [ ! -d "$DATA/physiological_data" ] && [ -z "$WAIT_FOR" ]; then
     echo "ERROR: $DATA is not populated and no dependency job was given." >&2
@@ -62,35 +64,43 @@ J_SELF=$(sbatch --parsable --job-name=pn26L_selfnorm --partition=short \
     python src/data/self_norm.py --features "$FEATS" --out "$FEATS_V8")
 echo "self_norm    = $J_SELF"
 
+# Coherence: the single largest measured feature gain (+0.024), and cheap at
+# about 6s per record against 9s for the base extractor.
+J_COH=$(sbatch --parsable --job-name=pn26L_coh --partition=short \
+    --array=0-63%32 $EXCLUDE $DEP \
+    --export=ALL,DATA_FOLDER="$DATA",OUTDIR="$COH" \
+    slurm/extract_coh.sh)
+echo "coherence    = $J_COH"
+
+J_COHMERGE=$(sbatch --parsable --job-name=pn26L_cohmerge --partition=short \
+    $EXCLUDE --dependency=afterany:$J_COH,afterok:$J_SELF \
+    --cpus-per-task=8 --mem=96G --time=02:00:00 slurm/run.sh \
+    python scripts/merge_coherence.py --features "$FEATS_V8" \
+        --coherence-parts "$COH" --out "$FEATS_V9")
+echo "coh merge    = $J_COHMERGE"
+
+# Age and BMI are withheld: age because the metric discounts it and it
+# displaces signal, BMI because its missingness is a site-specific
+# healthcare-contact proxy that does not transfer.
 J_BASE=$(sbatch --parsable --job-name=pn26L_baselines --partition=short \
-    $EXCLUDE --dependency=afterok:$J_SELF \
-    --cpus-per-task=16 --mem=96G --time=12:00:00 slurm/run.sh \
-    python scripts/run_baselines.py --features "$FEATS_V8" \
-        --out results/baselines_large_v8.json)
+    $EXCLUDE --dependency=afterok:$J_COHMERGE \
+    --cpus-per-task=16 --mem=128G --time=24:00:00 slurm/run.sh \
+    python scripts/run_baselines.py --features "$FEATS_V9" \
+        --drop-age --drop-cols bmi --out results/baselines_large_v9.json)
 echo "baselines    = $J_BASE"
 
 J_TUNE=$(sbatch --parsable --job-name=pn26L_tune --partition=short \
-    $EXCLUDE --dependency=afterok:$J_SELF \
-    --cpus-per-task=16 --mem=96G --time=12:00:00 slurm/run.sh \
-    python scripts/tune_lgbm.py --features "$FEATS_V8" \
+    $EXCLUDE --dependency=afterok:$J_COHMERGE \
+    --cpus-per-task=16 --mem=128G --time=24:00:00 slurm/run.sh \
+    python scripts/tune_lgbm.py --features "$FEATS_V9" \
         --out results/lgbm_tuning_large.json)
 echo "tune         = $J_TUNE"
 
-# 2. Philosopher's Stone latents. Independent of the hand-feature branch, so it
-#    only waits on the data itself. The wavelet spectrogram is ~65-90s per
-#    record on CPU while the forward pass is ~0.1s on GPU, so 12 shards over
-#    6,600 records is roughly 10 hours.
-J_PS=$(sbatch --parsable --job-name=pn26L_ps --array=0-11%12 $EXCLUDE $DEP \
-    --export=ALL,DATA_FOLDER="$DATA",OUTDIR="$PS_OUT" \
-    slurm/ps_extract.sh)
-echo "ps_extract   = $J_PS"
-
-J_PSEVAL=$(sbatch --parsable --job-name=pn26L_pseval --partition=short \
-    $EXCLUDE --dependency=afterany:$J_PS,afterok:$J_SELF \
-    --cpus-per-task=16 --mem=96G --time=12:00:00 slurm/run.sh \
-    python scripts/eval_ps_latents.py --ps-dir "$PS_OUT" \
-        --features "$FEATS_V8" --out results/ps_eval_large.json)
-echo "ps_eval      = $J_PSEVAL"
+# The Philosopher's Stone branch is deliberately omitted. Both
+# pre-registered gates failed on the small set: the latent recovers age
+# at R^2 = 0.998, which this metric values at zero, and adding it cost
+# 0.029 against hand features alone. Ten GPU-hours on 6,600 records
+# would buy a better-powered version of a settled negative.
 
 echo
 echo "chain submitted. watch with: squeue -u $USER"
