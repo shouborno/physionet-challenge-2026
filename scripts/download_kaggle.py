@@ -14,6 +14,7 @@ Usage:
 import argparse
 import os
 import sys
+import threading
 import time
 
 from kaggle.api.kaggle_api_extended import KaggleApi
@@ -46,7 +47,33 @@ def already_complete(path, expected_size):
     return os.path.getsize(path) == expected_size
 
 
-def download_one(api, dataset, remote_name, dest_root, expected_size, retries=4):
+class RateLimiter:
+    """Serialize request starts with a minimum gap between them.
+
+    Kaggle throttles the per-file download endpoint under concurrency: at six
+    workers every request began returning 404 after roughly 1,600 files, while a
+    single request still succeeded immediately. Pacing request starts keeps the
+    sweep alive over the hours a 214 GiB pull takes.
+    """
+
+    def __init__(self, min_interval):
+        self.min_interval = min_interval
+        self._lock = threading.Lock()
+        self._next_at = 0.0
+
+    def wait(self):
+        if self.min_interval <= 0:
+            return
+        with self._lock:
+            now = time.monotonic()
+            sleep_for = max(0.0, self._next_at - now)
+            self._next_at = max(now, self._next_at) + self.min_interval
+        if sleep_for:
+            time.sleep(sleep_for)
+
+
+def download_one(api, dataset, remote_name, dest_root, expected_size, retries=5,
+                 limiter=None):
     owner, name = dataset.split('/', 1)
     target = os.path.join(dest_root, remote_name)
 
@@ -57,6 +84,8 @@ def download_one(api, dataset, remote_name, dest_root, expected_size, retries=4)
 
     for attempt in range(retries):
         try:
+            if limiter is not None:
+                limiter.wait()
             # dataset_download_file writes into `path` preserving the remote
             # subdirectory layout, and unzips single-file archives itself.
             api.dataset_download_file(
@@ -80,7 +109,9 @@ def download_one(api, dataset, remote_name, dest_root, expected_size, retries=4)
             if attempt == retries - 1:
                 print(f'FAILED {remote_name}: {exc}', flush=True)
                 return 'fail'
-            time.sleep(5 * (attempt + 1))
+            # Exponential backoff. A 404 here means throttling, not a missing
+            # file, so backing off hard is what actually recovers the sweep.
+            time.sleep(min(120, 5 * (2 ** attempt)))
     return 'fail'
 
 
@@ -88,8 +119,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--dataset', required=True, help='owner/dataset-slug')
     parser.add_argument('--dest', required=True, help='destination directory')
-    parser.add_argument('--workers', type=int, default=6,
-                        help='concurrent downloads; keep modest to avoid rate limits')
+    parser.add_argument('--workers', type=int, default=2,
+                        help='concurrent downloads; Kaggle throttles above ~2')
+    parser.add_argument('--min-interval', type=float, default=0.35,
+                        help='minimum seconds between request starts')
     parser.add_argument('--manifest', default=None,
                         help='cache the file listing here to avoid re-enumerating')
     args = parser.parse_args()
@@ -115,21 +148,28 @@ def main():
                     fh.write(f'{name}\t{size}\n')
 
     total_bytes = sum(s for _, s in files if s)
-    print(f'Total {total_bytes / 2**30:.1f} GiB across {len(files)} files', flush=True)
+    todo = [(n, sz) for n, sz in files
+            if not already_complete(os.path.join(args.dest, n), sz)]
+    todo_bytes = sum(sz for _, sz in todo if sz)
+    print(f'Total {total_bytes / 2**30:.1f} GiB across {len(files)} files; '
+          f'{len(todo)} still needed ({todo_bytes / 2**30:.1f} GiB)', flush=True)
+    files = todo
 
     os.makedirs(args.dest, exist_ok=True)
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
+    limiter = RateLimiter(args.min_interval)
     counts = {'ok': 0, 'skip': 0, 'fail': 0}
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         futures = {
-            pool.submit(download_one, api, args.dataset, name, args.dest, size): name
+            pool.submit(download_one, api, args.dataset, name, args.dest, size,
+                        limiter=limiter): name
             for name, size in files
         }
         for i, fut in enumerate(as_completed(futures), 1):
             counts[fut.result()] += 1
-            if i % 100 == 0 or i == len(files):
+            if i % 25 == 0 or i == len(files):
                 print(f'{i}/{len(files)}  ok={counts["ok"]} '
                       f'skip={counts["skip"]} fail={counts["fail"]}', flush=True)
 

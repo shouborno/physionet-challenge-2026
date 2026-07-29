@@ -20,26 +20,34 @@ PY=/home/simran/.conda/envs/pn26/bin/python
 
 cd "$PROJECT" || exit 1
 
-echo "host=$(hostname) start=$(date -Is)"
+SWEEPLOG="slurm/logs/dl_sweeps_${SLURM_JOB_ID}.log"
+echo "host=$(hostname) start=$(date -Is) sweeplog=$SWEEPLOG"
 echo "dataset=$DATASET dest=$DEST"
 
 # The downloader is idempotent, so retry the whole sweep a few times: transient
 # Kaggle failures leave gaps that a second pass fills in cheaply (complete files
 # are skipped by size comparison).
 RC=1
-for attempt in 1 2 3; do
-    echo "--- sweep $attempt ---"
-    "$PY" scripts/download_kaggle.py \
+for attempt in $(seq 1 12); do
+    echo "--- sweep $attempt $(date -Is) ---"
+    # python -u so progress reaches the log immediately; no pipe filter,
+    # since a buffered grep makes a live sweep look hung.
+    "$PY" -u scripts/download_kaggle.py \
         --dataset "$DATASET" \
         --dest "$DEST" \
         --manifest "$MANIFEST" \
-        --workers 6
+        --workers "${DL_WORKERS:-3}" \
+        --min-interval "${DL_INTERVAL:-0.2}" \
+        >> "$SWEEPLOG" 2>&1
     RC=$?
+    tail -3 "$SWEEPLOG"
     if [ $RC -eq 0 ]; then
         break
     fi
-    echo "sweep $attempt exited $RC; retrying after backoff"
-    sleep 120
+    # Completed files are skipped by size on the next pass, so a sweep that
+    # dies to throttling still makes forward progress. Back off and continue.
+    echo "sweep $attempt exited $RC ($(du -sh "$DEST" | cut -f1) so far); backing off"
+    sleep 300
 done
 
 echo "end=$(date -Is) rc=$RC"
