@@ -50,9 +50,26 @@ def main():
     parser.add_argument('--limit', type=int, default=None,
                         help='cap the total number of records, for a fast smoke test')
     parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--require-signals', action='store_true',
+                        help='keep only records whose physiological and '
+                             'algorithmic EDFs are already on disk, so the '
+                             'fixture is usable mid-download')
     args = parser.parse_args()
 
     demo = pd.read_csv(os.path.join(args.src, 'demographics.csv'))
+
+    if args.require_signals:
+        def complete(row):
+            phys = os.path.join(args.src, 'physiological_data', row['SiteID'],
+                                f"{row['BidsFolder']}_ses-{row['SessionID']}.edf")
+            algo = os.path.join(args.src, 'algorithmic_annotations', row['SiteID'],
+                                f"{row['BidsFolder']}_ses-{row['SessionID']}"
+                                f"_caisr_annotations.edf")
+            return os.path.exists(phys) and os.path.exists(algo)
+
+        before = len(demo)
+        demo = demo[demo.apply(complete, axis=1)].reset_index(drop=True)
+        print(f'signal filter: {len(demo)} of {before} records have both EDFs')
     if args.limit:
         # Stratify the cap by site so every site stays represented.
         demo = (demo.groupby('SiteID', group_keys=False)

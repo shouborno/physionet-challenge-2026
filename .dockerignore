@@ -1,0 +1,33 @@
+# The Dockerfile does `COPY ./ /challenge`, so anything not excluded here ends
+# up in the image. The submission rules ask that entries carry only what is
+# needed to build and run the model, and several local directories would
+# actively break the build:
+#
+#   data/       raw and archives are symlinks into /scratch, which is dead
+#               inside a container, and the datasets must not ship anyway
+#   external/   vendored third-party clones, including a 2.4 GB checkpoint
+#   src/data/__pycache__  research-only bytecode; the container is Python 3.10
+#               and this is 3.11, so it could not load even if wanted
+
+data/
+results/
+saved_models/
+external/
+ignore/
+.devnotes/
+slurm/logs/
+
+.git/
+.gitignore
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+
+# Research and paper artifacts: useful in the repo, not needed in the image.
+tests/
+notebooks/
+docs/
+*.tex
+*.pdf
+*.aux
+*.cls
