@@ -70,6 +70,40 @@ def _install_helper_shims():
             setattr(helper_code, old, getattr(helper_code, new))
 
 
+def _install_specparam_shims():
+    """Expose the specparam 1.x attribute names on the 2.x model class.
+
+    extract_spectral_shape_features reads `aperiodic_params_` and
+    `peak_params_`, which existed in fooof and specparam 1.x. The installed
+    specparam is 2.0.0rc6, where those became `get_params('aperiodic')` and
+    `get_params('peak')`. The extractor wraps its fit in a broad `except
+    Exception`, so the AttributeError was swallowed and all six spectral-shape
+    features came back NaN on every one of 1,103 records: a silent failure that
+    looked exactly like a data property.
+
+    Restoring the old names as properties is preferable to editing the bytecode
+    and keeps the recovered extractors byte-identical to what produced the
+    cached v6 matrix.
+    """
+    try:
+        from specparam import SpectralModel
+    except ImportError:
+        return
+
+    def _params(model, kind):
+        try:
+            return model.get_params(kind)
+        except Exception:  # noqa: BLE001 - unfit model or no peaks found
+            return None
+
+    if not hasattr(SpectralModel, 'aperiodic_params_'):
+        SpectralModel.aperiodic_params_ = property(
+            lambda self: _params(self, 'aperiodic'))
+    if not hasattr(SpectralModel, 'peak_params_'):
+        SpectralModel.peak_params_ = property(
+            lambda self: _params(self, 'peak'))
+
+
 def _load_one(name, path):
     loader = importlib.machinery.SourcelessFileLoader(name, path)
     spec = importlib.util.spec_from_loader(name, loader)
@@ -99,6 +133,7 @@ def load_feature_modules(include_training=False):
         sys.path.insert(0, _REPO_ROOT)
 
     _install_helper_shims()
+    _install_specparam_shims()
 
     # `features.py` does `from data.features_caisr import ...`, so a stub
     # package named `data` must exist for those imports to resolve.

@@ -42,7 +42,8 @@ python -u scripts/extract_features.py \
     --data-folder "$DATA_FOLDER" \
     --outdir "$OUTDIR" \
     --shard "$SHARD" \
-    --n-shards "$N_SHARDS"
+    --n-shards "$N_SHARDS" \
+    ${EXTRA_ARGS:-}
 RC=$?
 
 echo "end=$(date -Is) rc=$RC"
