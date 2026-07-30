@@ -106,6 +106,58 @@ def evaluate(fit_predict, X, y, sites, ages, gap=DEFAULT_GAP, n_boot=2000,
     return df[[c for c in cols if c in df.columns]]
 
 
+def pooled_out_of_fold(fit_predict, X, y, sites, ages, gap=DEFAULT_GAP,
+                       n_boot=2000, seed=0, rank_normalize=True):
+    """Score every record once, from a model that never saw its site.
+
+    The per-fold statistic is the honest one but it is starved: the only
+    adequately powered fold carries 5,124 age-matched pairs and a subject-level
+    bootstrap SE near 0.039, which is wider than any gain measured so far. This
+    predicts each record from the leave-one-site-out model for its own site and
+    scores all of them together, recovering the pairs that fall across folds and
+    roughly halving the interval.
+
+    The catch is that predictions then come from different models, whose score
+    scales need not agree, and a pair spanning two folds compares two scales.
+    Rank-normalizing within fold removes that. It is not free: per-fold
+    normalization is not a global monotone transform, so it does change the
+    metric slightly, which is why this is reported alongside the per-fold
+    numbers rather than replacing them.
+
+    It is also optimistic relative to deployment, where one model scores every
+    record. Use it to rank candidates, not to predict the leaderboard.
+    """
+    X = np.asarray(X)
+    y = np.asarray(y, dtype=float)
+    sites = np.asarray(sites)
+    ages = np.asarray(ages, dtype=float)
+
+    scores = np.full(len(y), np.nan)
+    for name, tr, te in site_folds(sites):
+        if not name.startswith('holdout_'):
+            continue
+        if len(np.unique(y[tr])) < 2:
+            continue
+        fold_scores = np.asarray(
+            fit_predict(X[tr], y[tr], sites[tr], ages[tr], X[te], ages[te]),
+            dtype=float).ravel()
+        if rank_normalize and len(fold_scores) > 1:
+            order = np.argsort(np.argsort(fold_scores))
+            fold_scores = (order + 0.5) / len(fold_scores)
+        scores[te] = fold_scores
+
+    ok = np.isfinite(scores)
+    if ok.sum() < 50:
+        return {}
+
+    point, pairs = cm.auroc_age(y[ok], scores[ok], ages[ok], gap=gap,
+                                return_pairs=True)
+    lo, hi, sd = cm.bootstrap_ci(y[ok], scores[ok], ages[ok], gap=gap,
+                                 n_boot=n_boot, seed=seed)
+    return {'pooled_auroc_age': point, 'n_pairs': pairs, 'ci_low': lo,
+            'ci_high': hi, 'boot_sd': sd, 'n_scored': int(ok.sum())}
+
+
 def selection_statistic(folds_df):
     """The single number to rank models by.
 
@@ -113,11 +165,31 @@ def selection_statistic(folds_df):
     bound rather than a point estimate penalizes models whose apparent
     advantage rests on few comparisons, which is what let selection overfit
     last time.
+
+    Read this alongside `mean_powered`, not instead of it. A controlled
+    experiment on the full dataset varied two things that carry no information
+    at all, one leaked timing column and a StandardScaler in front of a tree
+    model, and moved the worst fold by 0.030 while the mean across powered
+    folds moved by 0.0014. The bootstrap interval captures resampling variance
+    but not that pipeline sensitivity, so the worst fold is the conservative
+    statistic and the mean is the stable one.
     """
     powered = folds_df[folds_df['powered']]
     if powered.empty:
         return float('nan')
     return float(powered['ci_low'].min())
+
+
+def mean_powered(folds_df):
+    """Mean age-conditioned AUROC across adequately powered folds.
+
+    Empirically an order of magnitude more stable than the worst fold under
+    pipeline perturbations, and closer to what a single hidden site measures.
+    """
+    powered = folds_df[folds_df['powered']]
+    if powered.empty:
+        return float('nan')
+    return float(powered['auroc_age'].mean())
 
 
 def summarize(folds_df, label=''):

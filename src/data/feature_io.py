@@ -26,8 +26,16 @@ TRAINING_ONLY = ('Time_to_Event', 'Last_Known_Visit_Date', 'Time_to_Last_Visit',
                  'Cognitive_Impairment')
 
 # Identifiers and targets: not leaks, but not features either.
+# Identifiers, targets, and instrumentation. The timing columns matter more
+# than they look: coh_time_sec leaked into one feature list and was worth
+# +0.013 on the worst fold, purely because extraction time tracks recording
+# length and site. Anything the pipeline measures about itself is excluded by
+# suffix, not just by name, so a future timer cannot repeat it.
 NON_FEATURES = ('patient_id', 'site_id', 'session_id', 'label',
-                'extract_time_sec', 'coh_time_sec', 'demo_age', 'demo_sex')
+                'extract_time_sec', 'coh_time_sec', 'tp_time_sec',
+                'demo_age', 'demo_sex')
+
+INSTRUMENTATION_SUFFIXES = ('_time_sec', '_elapsed', '_runtime', '_duration_sec')
 
 EXCLUDE = frozenset(TRAINING_ONLY + NON_FEATURES)
 
@@ -39,7 +47,9 @@ def load_features(path, drop_age=False, drop_cols=(), labelled_only=True):
         df = df[df['label'].notna()].copy()
 
     cols = [c for c in df.columns
-            if c not in EXCLUDE and pd.api.types.is_numeric_dtype(df[c])]
+            if c not in EXCLUDE
+            and not c.endswith(INSTRUMENTATION_SUFFIXES)
+            and pd.api.types.is_numeric_dtype(df[c])]
     if drop_age:
         cols = [c for c in cols if c != 'age']
     if drop_cols:
@@ -59,6 +69,10 @@ def assert_no_leaks(df, feature_cols, y=None, max_univariate_auroc=0.95):
     named = [c for c in feature_cols if c in TRAINING_ONLY]
     if named:
         raise ValueError(f'training-only columns in feature list: {named}')
+
+    timing = [c for c in feature_cols if c.endswith(INSTRUMENTATION_SUFFIXES)]
+    if timing:
+        raise ValueError(f'pipeline instrumentation in feature list: {timing}')
 
     if y is None and 'label' in df.columns:
         y = df['label'].to_numpy(dtype=float)

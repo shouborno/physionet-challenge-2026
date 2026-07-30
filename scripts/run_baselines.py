@@ -34,8 +34,11 @@ from src.eval import challenge_metrics as cm  # noqa: E402
 from src.eval import protocol  # noqa: E402
 from src.models.age_adjust import AgeConditionalStandardizer, AgeResidualizer  # noqa: E402
 
-META = {'patient_id', 'site_id', 'session_id', 'label', 'extract_time_sec',
-        'demo_age', 'demo_sex', 'Time_to_Event', 'Time_to_Last_Visit'}
+from src.data.feature_io import EXCLUDE, INSTRUMENTATION_SUFFIXES  # noqa: E402
+
+# Single source of truth, so a column excluded in one script cannot slip into
+# another. coh_time_sec reached a feature list this way and was worth +0.013.
+META = set(EXCLUDE)
 
 
 def make_sklearn_fit(estimator_factory, residualize=False, standardize=False,
@@ -265,7 +268,9 @@ def main():
     df = df[df['label'].notna()].copy()
 
     feature_cols = [c for c in df.columns
-                    if c not in META and pd.api.types.is_numeric_dtype(df[c])]
+                    if c not in META
+                    and not c.endswith(INSTRUMENTATION_SUFFIXES)
+                    and pd.api.types.is_numeric_dtype(df[c])]
     if args.drop_age:
         # Age contributes nothing the metric rewards, and measurably displaces
         # signal that does: the fitted score correlates with age at rho=0.33
