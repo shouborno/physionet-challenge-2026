@@ -184,8 +184,16 @@ out at 0.725 on plain AUROC. Only 11.8% of pairs are age-matched at gap=2.
 
 | # | date | model | local mean | leaderboard | reward |
 |---|---|---|---|---|---|
-| - | - | none submitted yet | - | - | - |
+| 1 | 2026-07-30 | blend 70/30, 159 features, GPU | 0.7723 | pending | pending |
 
-Nothing calibrates the local estimate against the leaderboard. In the
-unofficial phase the equivalent gap was 0.136 in the optimistic direction. Ten
-entries remain and the phase closes in late August.
+Entry 1 is the first configuration that could score at all: the previous
+submission called a helper deleted upstream and would have failed. Feedback
+takes up to 72 hours.
+
+Until it returns, nothing calibrates the local estimate against the
+leaderboard. In the unofficial phase the equivalent gap was 0.136 in the
+optimistic direction, and the supplementary recordings say the target site sits
+further away than any leave-one-site-out fold measures: median standardized
+mean difference 0.399 from I0004 to the training sites, against 0.136 to 0.247
+between the training sites themselves. The local number should be read as
+optimistic by an unknown margin, and entry 1 exists partly to measure it.
