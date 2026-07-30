@@ -1460,12 +1460,12 @@ def _predict_all(model, data_folder, verbose=False):
     sites = np.array([r[3] for r in usable])
     keys = [(r[4], r[5]) for r in usable]
 
-    scores = model['lgbm'].predict_proba(X)[:, 1]
-    is_probability = True
+    gbm_cal = model['lgbm'].predict_proba(X)[:, 1]
+    scores = gbm_cal
 
     if 'tabfm' in model:
         try:
-            gbm_p = scores
+            gbm_p = gbm_cal
             codes = model.get('site_codes', {})
             unknown = len(codes)
             site_col = np.array([codes.get(v, unknown) for v in sites], dtype=float)
@@ -1477,7 +1477,6 @@ def _predict_all(model, data_folder, verbose=False):
                 # are calibrated differently, so ranks are the common scale.
                 scores = (TABFM_WEIGHT * rankdata(tabfm_p) / n
                           + (1 - TABFM_WEIGHT) * rankdata(gbm_p) / n)
-                is_probability = False
             else:
                 scores = TABFM_WEIGHT * tabfm_p + (1 - TABFM_WEIGHT) * gbm_p
             if verbose:
@@ -1486,24 +1485,31 @@ def _predict_all(model, data_folder, verbose=False):
             if verbose:
                 print(f'TabFM prediction failed ({exc}); LightGBM only.')
 
-    return {k: (float(v), is_probability) for k, v in zip(keys, scores)}
+    # Two numbers per record, because the two metrics want different things.
+    # The blended rank orders best and AUROC reads only order. The reward reads
+    # the binary decision, which needs a calibrated posterior to compare
+    # against the local age prevalence, and LightGBM supplies one.
+    return {k: (float(v), float(q)) for k, v, q in zip(keys, scores, gbm_cal)}
 
 
-def _decide(score, age, prev_ages, prev_labels, prior_train, is_probability):
+def _decide(posterior, age, prev_ages, prev_labels, prior_train):
     """Threshold for the secondary reward metric.
 
     The reward pays 1/p - 1 for a true positive and 1/(1-p) - 1 for a true
     negative against -1 otherwise, so the expectations cross exactly where the
-    calibrated posterior meets the local age prevalence. Blended ranks are not
-    posteriors, so there the rank is compared against the same prevalence read
-    as a quantile, which is the order-preserving equivalent.
+    calibrated posterior meets the local age prevalence at that record's age.
+
+    This takes a posterior, never the blended rank. A rank is global across the
+    scored set while the prevalence is local to an age, so comparing them comes
+    apart: if older patients rank higher overall, almost all of them clear a
+    threshold set from their own higher prevalence, and younger ones clear
+    almost none. Measured on the rehearsal that cost 0.64 of reward at
+    unchanged AUROC.
     """
     p_a = _prevalence_at_age(age, prev_ages, prev_labels)
     if not np.isfinite(p_a):
         p_a = TARGET_PREVALENCE
-    if not is_probability:
-        return int(score >= 1.0 - p_a)
-    return int(_shift_prior(float(score), prior_train, TARGET_PREVALENCE) > p_a)
+    return int(_shift_prior(float(posterior), prior_train, TARGET_PREVALENCE) > p_a)
 
 
 def run_model(model, record, data_folder, verbose):
@@ -1538,14 +1544,13 @@ def run_model(model, record, data_folder, verbose):
             # A record the batch could not process. Predict the prior rather
             # than guessing from a partial feature vector.
             return 0, float(prior_train)
-        score, is_probability = hit
+        score, posterior = hit
     except Exception as exc:
         if verbose:
             print(f'  run_model failed ({exc}); returning a negative prediction.')
         return 0, 0.0
 
-    return (int(_decide(score, age, prev_ages, prev_labels,
-                        prior_train, is_probability)),
+    return (int(_decide(posterior, age, prev_ages, prev_labels, prior_train)),
             float(score))
 
 
