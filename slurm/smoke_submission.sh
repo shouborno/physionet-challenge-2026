@@ -3,7 +3,7 @@
 #SBATCH --partition=short,long
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=120G
+#SBATCH --mem=180G
 #SBATCH --time=06:00:00
 #SBATCH --output=slurm/logs/%x_%j.out
 #SBATCH --error=slurm/logs/%x_%j.out
@@ -15,11 +15,11 @@
 set -o pipefail
 PROJECT=/home/simran/sleep-study-cognitive-screening-challenge
 export PATH=/home/simran/.conda/envs/pn26/bin:$PATH
-# TabFM is pip-installed to a --target directory here rather than into the
-# conda environment, so it needs to be on the path. In the container it lands
-# in site-packages normally, which is why team_code.py does not add this
-# itself: the path belongs to this machine, not to the submission.
-export PYTHONPATH="$PROJECT:/scratch/simran/pn26/tabfm:$PYTHONPATH"
+# Only the project. TabFM is now installed into the environment itself.
+# Putting its old pip --target directory on the path shadowed the whole
+# environment, pandas included, and the organizers' run_model.py died writing a
+# prediction into a bool column against the wrong pandas version.
+export PYTHONPATH="$PROJECT:$PYTHONPATH"
 N=${SLURM_CPUS_PER_TASK:-8}
 export OMP_NUM_THREADS=$N MKL_NUM_THREADS=$N OPENBLAS_NUM_THREADS=$N
 cd "$PROJECT" || exit 1
