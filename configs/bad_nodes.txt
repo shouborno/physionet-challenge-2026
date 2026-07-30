@@ -1,1 +1,0 @@
-compute-2-02,compute-2-03,compute-2-04,compute-2-05,compute-2-06,compute-2-08,compute-3-06,compute-4-03,gpu-4-12,gpu-4-13

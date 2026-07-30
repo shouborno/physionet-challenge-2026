@@ -15,3 +15,26 @@ __pycache__/
 *.aux
 *.log
 *.out
+
+# Not required to build or run the prediction code. The submission
+# instructions ask for nothing beyond that, and the organizers publish
+# submitted repositories, so main carries only what runs. Everything here is
+# preserved on the `research` branch.
+/configs/
+/diagnostics/
+/docs/
+/results/
+/scripts/
+/slurm/
+/tests/
+/src/eval/
+/src/models/
+/src/submission/
+/src/data/feature_io.py
+/src/data/pyc_bridge.py
+/src/data/self_norm.py
+/src/data/features_*.pyc
+/src/features/
+/src/training/
+abstract_supplement.*
+cinc-abstract.cls
