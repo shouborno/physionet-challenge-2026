@@ -30,7 +30,7 @@ for dev in ('cpu',):
                           n_svd_features='sqrt', random_state=42)
     t = time.time(); clf.fit(X, y); fit_s = time.time()-t
     print(f'[{dev}] fit on {len(y)} rows: {fit_s:.1f}s', flush=True)
-    for n in (10, 100):
+    for n in (5, 25, 100):
         t = time.time(); clf.predict_proba(X[:n]); el = time.time()-t
         print(f'[{dev}] predict {n:4d} rows: {el:6.1f}s  '
               f'({el/n:.2f}s/record)', flush=True)
