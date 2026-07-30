@@ -1,9 +1,22 @@
 antropy==0.2.2
 edfio==0.4.10
 joblib==1.4.2
+lightgbm==4.6.0
 neurokit2==0.2.13
 numpy==2.0.2
 pandas==2.2.2
 scikit-learn==1.6.0
 scipy==1.13.1
+tabfm==1.0.1
+torch==2.5.1
 yasa==0.7.0
+
+# tabfm does not declare these, and the failure is invisible in a warm
+# environment. huggingface_hub imports safetensors conditionally and then uses
+# it unguarded in _load_as_safetensor, so a cold cache downloading the
+# safetensors weights dies with NameError rather than a missing-dependency
+# message. Our development environment loads TabFM only because its Hugging
+# Face cache was already populated; a container starts cold.
+huggingface_hub==1.8.0
+safetensors==0.6.2
+einops==0.8.2
