@@ -10,7 +10,7 @@ unless stated otherwise.
 |---|---|
 | Leaderboard top five | 0.748 - 0.773 |
 | Roughly top twenty | ~0.70 |
-| **Our best so far** | **0.6553** |
+| **Our best so far** | **0.6786** |
 | Age alone (floor) | 0.5401 |
 
 157 submissions on the board.
@@ -29,10 +29,32 @@ doing anything exotic. Their code is public.
 | LR C=0.005, 272 features (the shipped model) | 0.5937 | - |
 | LightGBM, 402 features | 0.6066 | +0.013 |
 | age withheld as a model input | 0.6311 | +0.025 |
-| plus 550 coherence features (952 total) | **0.6553** | +0.024 |
+| plus 550 coherence features | 0.6553 | +0.024 |
+| plus recording year | 0.6665 | +0.011 |
+| minus BMI | **0.6786** | +0.012 |
 
-Both real gains changed *what information the model has*. Everything that
-rearranged the objective or the weighting landed within noise.
+Four changes helped, two additions and two removals. Eleven rearranged the
+objective, the weighting or the model family and all landed within noise. The
+distinction is not adding features: it is giving the model information that
+transfers across sites and withholding information that does not.
+
+### Pooled out-of-fold scoring
+
+Scoring every record once from the leave-one-site-out model for its own site,
+with within-fold rank normalization, recovers the pairs that fall across folds:
+10,063 against 5,124, and bootstrap sd 0.036 against 0.049. It separates
+variants the per-fold statistic cannot.
+
+| variant | per-fold worst | pooled |
+|---|---|---|
+| full, 951 features | 0.6628 | 0.6568 |
+| no coherence | 0.6587 (-0.004) | 0.6413 (-0.016) |
+| no recording year | 0.6633 (+0.001) | 0.6255 (-0.031) |
+
+Per-fold says recording year does nothing; pooled makes it the largest single
+contribution. Pooled is the better ranking statistic and the worse leaderboard
+predictor, since it compares scores from different fold models, so both are
+reported.
 
 ## The measurement floor
 
@@ -79,11 +101,39 @@ none beating plain LightGBM:
 | method | worst fold | note |
 |---|---|---|
 | conditional logistic regression | 0.5824 | exact estimator for a matched design |
-| matched-pair sample weights | 0.5818 | monotone harm: 0.6311, 0.6181, 0.5997, 0.5818 as strength rises |
+| matched-pair sample weights | 0.5818 | monotone harm as strength rises |
 | pairwise ranking, within-site | 0.5868 | see correction below |
 | age residualization | -0.02 to -0.05 | consistent across three model families |
 | site filtering | 0.5974 vs 0.6118 | removing site-predictive features costs accuracy |
+| site as a covariate | 0.6454 vs 0.6665 | modelling site costs as much as removing it |
 | hyperparameter tuning | 0.6310 | +0.015 over search median, sd 0.0193 |
+| self-referential normalization | 0.5773 alone | helps only inside the full pool |
+| TabPFN v2 | 0.5931 | confounded by PCA to 200 of 951 features |
+| Philosopher's Stone | -0.029 combined | latent recovers age at R^2 = 0.998 |
+| additive-age lambda sweep | 0.6630-0.6637 | flat in lambda, and below the plain drop |
+
+**The matched-ranking question is settled.** Three independent protocols agree
+that methods exploiting the metric's matched structure lose to a plain
+classifier: our leave-one-site-out harness, a collaborator's leak-free
+stratified CV (six interventions, six losses, with a dose-response), and their
+LOSO replication. Clemencon's result explains it, since the Bayes scorer is
+already optimal within every stratum, so a matched objective can only produce a
+noisier estimate of the same function. At 62 effective positives that variance
+dominates. In short, the age-conditioned metric does not reward age-conditioned
+modelling.
+
+**The site question is settled in both directions.** Removing site hurts and
+modelling it hurts about equally, so site handling is not the lever. Coherence
+features are the most site-predictive block we have and help anyway.
+Site-predictiveness and usefulness are not opposed in this dataset, and every
+method premised on that opposition has lost.
+
+**Philosopher's Stone failed both pre-registered gates.** G1 wanted 0.58 alone
+and got 0.5753; G2 wanted +0.02 combined and lost 0.029. Age is recoverable
+from the latent at R^2 = 0.998, so the embedding is very nearly a re-encoding
+of the one axis this metric values at zero. Contradicting the published
+explanation: site decodes from the latent at 0.9175 against 0.9637 from our own
+hand features, so on this data the failure is the age axis, not site encoding.
 
 **Why residualization cannot work.** Measured on our own matrix, it perturbs
 age-matched pair differences by 2.9% and unmatched ones by 15.7%. Within-stratum
