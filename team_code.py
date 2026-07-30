@@ -32,17 +32,72 @@ _trapz = np.trapezoid if hasattr(np, 'trapezoid') else np.trapz
 # ============================================================
 
 SELECTED_FEATURES = [
-    'caisr_prob_arous_std', 'stage_prob_entropy_std', 'arousal_index',
-    'sw_slope_mean_n3', 'hrv_rmssd_rem', 'race_unavail', 'hrv_lf_hf_ratio',
-    'caisr_prob_n2_max', 'rem_theta_alpha_ratio', 'hrv_sample_entropy',
-    'eeg_n3_rel_theta', 'dfa_wake', 'sw_frequency_mean_n2', 'spindle_density_n3',
-    'eeg_n3_activity', 'trans_R_W', 'arousal_nrem_pct', 'sw_negpeak_ptp_ratio_n3',
-    'trans_N3_W', 'eeg_rem_rel_alpha', 'stage_prob_entropy_mean',
-    'sw_duration_mean_n3', 'spo2_odi', 'trans_persistence_mean', 'eeg_n3_kurtosis',
-    'trans_N2_N3', 'eeg_wake_rel_beta', 'eeg_overall_rel_alpha',
+    # 95 from the inline extractor, 63 temporal pooling features, and
+    # recording year. Derived rather than hand-listed: see
+    # diagnostics/gen_shipped_features.py, which regenerates
+    # configs/shipped_features.json from the extractor itself so the training
+    # and inference lists cannot drift apart.
+    #
+    # Measured on 6,600 records at three seeds, this set reaches 0.7723 with
+    # the blend. Adding the 550 coherence features costs 0.006, adding the 307
+    # bytecode-only ones costs 0.011, and in-fold selection over all 1,015 lost
+    # to using all 1,015 under seven different methods.
+    'age', 'ahi_auto', 'arousal_duration_mean',
+    'arousal_duration_std', 'arousal_index', 'arousal_nrem_pct',
+    'bout_std_R', 'bout_std_W', 'caisr_prob_arous_max',
+    'caisr_prob_arous_min', 'caisr_prob_arous_std', 'caisr_prob_n1_min',
+    'caisr_prob_n2_max', 'caisr_prob_r_std', 'caisr_prob_w_min',
+    'dfa_n3', 'dfa_wake', 'dtabr_n2',
+    'eeg_n1_rel_theta', 'eeg_n2_kurtosis', 'eeg_n2_rel_theta',
+    'eeg_n3_activity', 'eeg_n3_kurtosis', 'eeg_n3_mobility',
+    'eeg_n3_rel_beta', 'eeg_n3_rel_delta', 'eeg_n3_rel_sigma',
+    'eeg_n3_rel_theta', 'eeg_overall_mobility', 'eeg_overall_rel_alpha',
+    'eeg_rem_activity', 'eeg_rem_complexity', 'eeg_rem_rel_alpha',
+    'eeg_rem_rel_theta', 'eeg_wake_rel_beta', 'higuchi_fd_n2',
+    'hrv_lf_hf_ratio', 'hrv_pnn50', 'hrv_rmssd_rem',
+    'hrv_sample_entropy', 'hrv_sdnn_rem', 'kcomplex_density_n2',
+    'n3_first_vs_second_half', 'n_awakenings', 'n_sleep_cycles',
+    'pct_rem', 'petrosian_fd_n2', 'race_unavail',
+    'rec_year', 'rem_theta_alpha_ratio', 'sample_entropy_rem',
+    'sex_female', 'so_count_n2', 'spectral_edge_95_n2',
+    'spindle_density_n2', 'spindle_density_n3', 'spo2_min',
+    'spo2_odi', 'spo2_pct_below88', 'stage_prob_entropy_mean',
+    'stage_prob_entropy_std', 'stationary_dist_divergence', 'sw_density_n2',
+    'sw_duration_mean_n3', 'sw_frequency_mean_n2', 'sw_frequency_mean_n3',
+    'sw_negpeak_ptp_ratio_n3', 'sw_slope_mean_n3', 'theta_alpha_ratio_overall',
+    'total_recording_min', 'tp_alpha_cv', 'tp_alpha_drift',
+    'tp_alpha_excursion_rate', 'tp_alpha_iqr', 'tp_alpha_q10',
+    'tp_alpha_q25', 'tp_alpha_q50', 'tp_alpha_q75',
+    'tp_alpha_q88', 'tp_alpha_q95', 'tp_alpha_range80',
+    'tp_alpha_worst_hour_frac', 'tp_beta_cv', 'tp_beta_drift',
+    'tp_beta_excursion_rate', 'tp_beta_iqr', 'tp_beta_q10',
+    'tp_beta_q25', 'tp_beta_q50', 'tp_beta_q75',
+    'tp_beta_q88', 'tp_beta_q95', 'tp_beta_range80',
+    'tp_beta_worst_hour_frac', 'tp_delta_cv', 'tp_delta_drift',
+    'tp_delta_excursion_rate', 'tp_delta_iqr', 'tp_delta_q10',
+    'tp_delta_q25', 'tp_delta_q50', 'tp_delta_q75',
+    'tp_delta_q88', 'tp_delta_q95', 'tp_delta_range80',
+    'tp_delta_worst_hour_frac', 'tp_ratio_delta_alpha_q88', 'tp_ratio_delta_beta_q88',
+    'tp_ratio_theta_alpha_q88', 'tp_sigma_cv', 'tp_sigma_drift',
+    'tp_sigma_excursion_rate', 'tp_sigma_iqr', 'tp_sigma_q10',
+    'tp_sigma_q25', 'tp_sigma_q50', 'tp_sigma_q75',
+    'tp_sigma_q88', 'tp_sigma_q95', 'tp_sigma_range80',
+    'tp_sigma_worst_hour_frac', 'tp_theta_cv', 'tp_theta_drift',
+    'tp_theta_excursion_rate', 'tp_theta_iqr', 'tp_theta_q10',
+    'tp_theta_q25', 'tp_theta_q50', 'tp_theta_q75',
+    'tp_theta_q88', 'tp_theta_q95', 'tp_theta_range80',
+    'tp_theta_worst_hour_frac', 'trans_N1_N1', 'trans_N1_N2',
+    'trans_N1_N3', 'trans_N1_R', 'trans_N1_W',
+    'trans_N2_N1', 'trans_N2_N2', 'trans_N2_N3',
+    'trans_N2_R', 'trans_N2_W', 'trans_N3_N1',
+    'trans_N3_N2', 'trans_N3_N3', 'trans_N3_R',
+    'trans_N3_W', 'trans_R_N1', 'trans_R_N2',
+    'trans_R_N3', 'trans_R_R', 'trans_R_W',
+    'trans_W_N1', 'trans_W_N2', 'trans_W_N3',
+    'trans_W_R', 'trans_W_W', 'trans_persistence_mean',
 ]
 
-MODEL_C = 0.005
+TABFM_WEIGHT = 0.7  # rank weight on TabFM; 0.7 was the knee of the curve
 
 EEG_CANDIDATES = ['c3-m2', 'c4-m1', 'f3-m2', 'f4-m1', 'o1-m2', 'o2-m1']
 
@@ -1119,6 +1174,39 @@ def _shift_prior(q, prior_train, prior_target=TARGET_PREVALENCE):
     return pos / (pos + neg)
 
 
+def _temporal_features(phys_channels, phys_fs, algo_data, csv_path):
+    """The 63 temporal pooling features, or NaNs if the record cannot supply them.
+
+    Every other feature here collapses a night into one number, almost always a
+    mean. These take high quantiles, dispersion and drift of per-epoch band
+    power instead, so a night alternating between normal and severely slowed
+    looks different from one that is uniformly mediocre.
+
+    On 6,600 records they are the strongest physiological block available: with
+    recording year they reach 0.7429 against 0.7248 for the 95 classical
+    features. An earlier note in this repo called them a null, which came from
+    adding them to a 952-feature matrix that was mostly noise, where 63 good
+    columns could not show.
+    """
+    from src.data.features_coherence import standardize_channels
+    from src.data.features_temporal import (BANDS, QUANTILES,
+                                            extract_temporal_pooling_features)
+    try:
+        std, sfs = standardize_channels(phys_channels, phys_fs, csv_path)
+        return extract_temporal_pooling_features(
+            std, sfs, (algo_data or {}).get('stage_caisr'))
+    except Exception:
+        names = []
+        for b in BANDS:
+            names += [f'tp_{b}_q{int(q * 100)}' for q in QUANTILES]
+            names += [f'tp_{b}_iqr', f'tp_{b}_range80', f'tp_{b}_cv',
+                      f'tp_{b}_drift', f'tp_{b}_worst_hour_frac',
+                      f'tp_{b}_excursion_rate']
+        names += ['tp_ratio_delta_alpha_q88', 'tp_ratio_theta_alpha_q88',
+                  'tp_ratio_delta_beta_q88']
+        return {n: float('nan') for n in names}
+
+
 def _load_record_signals(data_folder, site_id, patient_id, session_id):
     """Load physiological and algorithmic annotation signals for a record."""
     phys_file = os.path.join(data_folder, PHYSIOLOGICAL_DATA_SUBFOLDER,
@@ -1165,11 +1253,12 @@ def _extract_one(data_folder, record, demo_file, csv_path):
 
         fd = extract_all_features_for_record(
             patient_data, phys_channels, phys_fs, algo_data, csv_path)
+        fd.update(_temporal_features(phys_channels, phys_fs, algo_data, csv_path))
 
         age = float(load_age(patient_data))
 
         del phys_channels, algo_data
-        return fd, label, age
+        return fd, label, age, site_id, patient_id, session_id
     except Exception:
         return None
 
@@ -1226,6 +1315,7 @@ def train_model(data_folder, model_folder, verbose, csv_path=DEFAULT_CSV_PATH):
     feat_dicts = [r[0] for r in results]
     y = np.array([r[1] for r in results], dtype=int)
     ages = np.array([r[2] for r in results], dtype=float)
+    sites = np.array([r[3] for r in results])
 
     if verbose:
         print(f'Training on {len(y)} records '
