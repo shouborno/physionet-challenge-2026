@@ -1230,12 +1230,24 @@ def _load_record_signals(data_folder, site_id, patient_id, session_id):
 # Required Functions
 # ============================================================
 
-def _extract_one(data_folder, record, demo_file, csv_path):
-    """Extract features and label for a single record.
+def _extract_one(data_folder, record, demo_file, csv_path, require_label=True):
+    """Extract features, and the label when there is one, for a single record.
 
-    Returns (feature_dict, label, age) or None if the record is unusable. Runs
-    in a worker process, so it must not touch module-level mutable state beyond
-    the read-through demographics cache.
+    Returns (features, label, age, site, patient, session) or None.
+
+    require_label must be False at inference. The validation and test
+    demographics carry no Cognitive_Impairment column, so demanding a label
+    there rejects every record: extraction returns nothing, the prediction
+    cache comes back empty, and every prediction falls through to the training
+    prior. That is a constant score, and it is what entry 1 did. It scored
+    AUROC 0.500 with accuracy 0.935 and AUPRC 0.065, which are exactly
+    1 - prevalence and prevalence.
+
+    Training still requires a label, since a record without one cannot be
+    fitted against.
+
+    Runs in a worker process, so it must not touch module-level mutable state
+    beyond the read-through demographics cache.
     """
     try:
         patient_id = record[HEADERS['bids_folder']]
@@ -1243,8 +1255,10 @@ def _extract_one(data_folder, record, demo_file, csv_path):
         session_id = record[HEADERS['session_id']]
 
         label = _cached_label(demo_file, patient_id)
-        if label not in (0, 1):
+        if require_label and label not in (0, 1):
             return None
+        if label not in (0, 1):
+            label = float('nan')
 
         patient_data = _cached_demographics(demo_file, patient_id, session_id)
 
@@ -1441,18 +1455,25 @@ def _predict_all(model, data_folder, verbose=False):
         try:
             from joblib import Parallel, delayed
             results = Parallel(n_jobs=n_jobs, verbose=10 if verbose else 0)(
-                delayed(_extract_one)(data_folder, r, demo_file, DEFAULT_CSV_PATH)
+                delayed(_extract_one)(data_folder, r, demo_file, DEFAULT_CSV_PATH,
+                                      require_label=False)
                 for r in records)
         except Exception as exc:
             if verbose:
                 print(f'Parallel extraction failed ({exc}); running serially.')
             results = None
     if results is None:
-        results = [_extract_one(data_folder, r, demo_file, DEFAULT_CSV_PATH)
+        results = [_extract_one(data_folder, r, demo_file, DEFAULT_CSV_PATH,
+                                require_label=False)
                    for r in records]
 
     usable = [r for r in results if r is not None]
     if not usable:
+        # Never fail silently here again. An empty cache makes every prediction
+        # the training prior, which scores 0.5 and looks like a weak model
+        # rather than a broken one.
+        print(f'ERROR: no records could be processed from {data_folder}; '
+              f'predictions will be constant', flush=True)
         return {}
 
     X = _replace_inf(np.array(
