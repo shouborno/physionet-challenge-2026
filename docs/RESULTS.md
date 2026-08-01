@@ -184,16 +184,53 @@ out at 0.725 on plain AUROC. Only 11.8% of pairs are age-matched at gap=2.
 
 | # | date | model | local mean | leaderboard | reward |
 |---|---|---|---|---|---|
-| 1 | 2026-07-30 | blend 70/30, 159 features, GPU | 0.7723 | pending | pending |
+| 1 | 2026-07-30 | blend 70/30, 159 features | 0.7723 | **0.500** | 0.008 |
+| 2 | 2026-07-31 | blend + CORAL, 151 features | ~0.795 | pending | pending |
 
-Entry 1 is the first configuration that could score at all: the previous
-submission called a helper deleted upstream and would have failed. Feedback
-takes up to 72 hours.
+### Why entry 1 scored 0.500
 
-Until it returns, nothing calibrates the local estimate against the
-leaderboard. In the unofficial phase the equivalent gap was 0.136 in the
-optimistic direction, and the supplementary recordings say the target site sits
-further away than any leave-one-site-out fold measures: median standardized
-mean difference 0.399 from I0004 to the training sites, against 0.136 to 0.247
-between the training sites themselves. The local number should be read as
-optimistic by an unknown margin, and entry 1 exists partly to measure it.
+Two independent faults, and the first hid the second.
+
+`_extract_one` refused any record whose label was not 0 or 1. The validation
+demographics carry no `Cognitive_Impairment` column, so every record was
+refused, the prediction cache came back empty, and every call fell through to
+the training prior. One number for every record gives AUROC 0.500 by
+definition, with accuracy 0.935 and AUPRC 0.065, which are exactly
+1 - prevalence and prevalence. Those three numbers identify the failure
+uniquely; no model that merely failed to generalize produces them.
+
+`rec_year` was in the feature list and nothing computed it. It comes from
+`CreationTime` in the demographics file, and only the offline pipeline ever did
+that join, so the feature worth 0.084 was NaN for every record. Fixing the
+label gate alone would have shipped a model missing the single largest
+contributor to its score, and that would have read as a failure to generalize
+rather than as a bug.
+
+Neither was visible to any of the six rehearsals, because all six ran against
+the training folder, which has labels. The condition that mattered was never
+exercised. Rehearsals now strip the label columns first.
+
+### What changed for entry 2
+
+| change | delta | note |
+|---|---|---|
+| label fix | restores the model at all | |
+| `rec_year` actually computed | restores +0.084 | |
+| site-relative recording position | +0.018 | transfers where absolute date does not |
+| CORAL adaptation | +0.013 in validation, more expected | |
+| drop 9 slow-wave columns | +0.005 | detector failures encode site |
+
+### Risks carried into entry 2
+
+Adaptation is validated across leave-one-site-out gaps of 0.136 to 0.247
+standardized mean difference, while the supplementary recordings put the hidden
+site at 0.399. Widening the gap synthetically, CORAL's advantage grows from
+0.008 to 0.040, so this is expected to help rather than hurt, but it is an
+extrapolation.
+
+The recording-date artifact held out at 0.827, 0.744 and 0.617 across the three
+sites, tracking prevalence. The hidden site's prevalence is unknown.
+
+The local estimate exceeds the leaderboard maximum of 0.773. Either the model
+leads, or the estimate is optimistic. Only a scored entry distinguishes them,
+and entry 1 produced no information on that question because it never ran.
