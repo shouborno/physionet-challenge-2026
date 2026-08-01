@@ -1218,6 +1218,17 @@ def _add_date_features(rows, demo_file):
         if np.isfinite(yr):
             latest[site] = max(latest.get(site, -np.inf), yr)
 
+    # The window edge is the latest recording at the site. A high quantile was
+    # tried, on the theory that the maximum is noisy and would be missing from
+    # a truncated folder, and it measured worse: 0.7647 against 0.7716 with the
+    # full site visible, and behind at 50% and 25% visibility too. It only wins
+    # when a tenth of the site is visible. Subsampling barely moves a maximum,
+    # so the earlier fixed-offset perturbation test overstated the risk.
+    latest = {}
+    for site, yr in zip(sites_seen, years):
+        if np.isfinite(yr):
+            latest[site] = max(latest.get(site, -np.inf), yr)
+
     for r, yr, site in zip(rows, years, sites_seen):
         r[0]['rec_year'] = yr
         top = latest.get(site, np.nan)
@@ -1225,37 +1236,6 @@ def _add_date_features(rows, demo_file):
                                   if np.isfinite(yr) and np.isfinite(top)
                                   else np.nan)
     return rows
-
-
-def _add_site_relative_date(frame):
-    """Express recording date relative to the site's own collection window.
-
-    Worth 0.018, the largest single gain measured after the label fix, and it
-    replaces nothing: rec_year stays.
-
-    The reason it helps is not the censoring rule it was built to model. In the
-    training set every negative has at least six years of follow-up and no
-    record falls below that, so the eligibility indicator is constant and
-    useless. What this actually computes is the recording date measured against
-    the latest recording at the same site, and that transfers where the
-    absolute date does not. The year 2013 sits early in a site collecting from
-    2007 to 2022 and late in one collecting from 2011 to 2020, and the label
-    artifact runs through position in the window rather than through the
-    calendar.
-
-    Computed per site from recording dates alone, so it is available for a
-    hidden site from the same demographics file the organizers supply. Like
-    the covariance used for adaptation, it is a statistic of the folder being
-    scored, which is worth stating rather than burying.
-    """
-    if 'rec_year' not in frame.columns or 'site_id' not in frame.columns:
-        frame['followup_avail'] = np.nan
-        return frame
-    latest = frame.groupby('site_id')['rec_year'].transform('max')
-    # The +6 keeps the units interpretable as years of follow-up a negative
-    # would need; it is a constant shift and does not affect any tree.
-    frame['followup_avail'] = latest + 6.0 - frame['rec_year']
-    return frame
 
 
 def _temporal_features(phys_channels, phys_fs, algo_data, csv_path):
@@ -1438,15 +1418,20 @@ def train_model(data_folder, model_folder, verbose, csv_path=DEFAULT_CSV_PATH):
 
 
 CORAL_EPS = 1e-4
-# Adaptation is skipped below this many target records. Two independent
-# measurements agree on where it stops paying: at 200 and 300 target records
-# CORAL is clearly ahead of not adapting (0.7841/0.7908 and 0.7912 against
-# 0.7724/0.7764), at 100 it is marginal or behind (0.7686/0.7782), and at 50 it
-# is behind in both. A 150x150 covariance from a hundred records is rank
-# deficient, so this is expected rather than surprising. The threshold sits
-# above the crossover, not at it, because the cost of adapting badly on the one
-# site we are scored on is larger than the gain forgone.
-CORAL_MIN_TARGET = 300
+# Adaptation is skipped below this many target records.
+#
+# A hard switch beat every graded schedule that was tried. Interpolating along
+# the covariance geodesic with alpha set from the target size loses at every
+# size: at 200 records the best schedule reaches 0.7872 against 0.7897 for
+# adapting fully, and at 400 it reaches 0.7842 against 0.7860. Partial
+# adaptation is worse than deciding.
+#
+# The threshold itself is 200 rather than 300. At 100 target records adapting
+# costs 0.004 against refusing, so the guard earns its place. At 200 refusing
+# costs 0.014, so a threshold of 300 would throw away a real gain. A 151x151
+# covariance needs a few hundred rows to mean anything, and 200 is where that
+# starts to hold here.
+CORAL_MIN_TARGET = 200
 
 
 def _coral_transform(source, target, eps=CORAL_EPS):
