@@ -1,6 +1,6 @@
 # PhysioNet Challenge 2026: Screening for Cognitive Impairment During Sleep Studies
 
-Entry by S. A. I. Shouborno and Bashima Islam, Worcester Polytechnic Institute.
+Entry by S. A. I. Shouborno and Bashima Islam, University of Massachusetts Amherst.
 
 ## Approach
 
