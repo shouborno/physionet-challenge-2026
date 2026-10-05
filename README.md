@@ -28,7 +28,8 @@ the models are calibrated differently.
   that is uniformly mediocre. Adapted from the winning entry of the 2023
   I-CARE Challenge, the closest analogous problem.
 - Recording year and its position within the site's collection window,
-  discussed below.
+  discussed below. The hidden sets carried no dates, so both were empty at
+  scoring.
 
 Preprocessing is median imputation and standard scaling. Site is supplied to
 TabFM as a covariate, with an unseen-site code at inference, which is the real
@@ -47,41 +48,43 @@ being scored. Nothing in the Challenge rules restricts it and `run_model`
 receives the whole data folder, but it is a stronger use of the test set than
 batching for speed and is stated here rather than buried.
 
-It is worth 0.013 in leave-one-site-out validation, and should be worth more in
-deployment. The supplementary recordings put the median standardized mean
-difference from the hidden site to the training sites at 0.399, against 0.136
-to 0.247 between the training sites themselves, so validation exercises
-adaptation across roughly half the real gap. Widening the gap synthetically,
-CORAL's advantage grows from 0.008 to 0.040 while the unadapted model degrades.
+With recording date among the features, CORAL raised the worst training site,
+S0001, by 0.020 in leave-one-site-out validation and left the mean unchanged.
+Without the date it does not help. It moves the mean by 0.004, lowers S0001 by
+0.016, and with the held-out site's dates blanked, the condition the hidden sets
+imposed, it costs 0.019 on the mean. It stays in the code because it is part of
+the scored entry.
 
 Adaptation is skipped below 200 target records, where a 151x151 covariance
-cannot be estimated well enough to help. Of four adaptation methods tried, only
-CORAL helped: target-mean scaling, importance weighting by an estimated density
-ratio, and pseudo-labelling target records into TabFM's context all landed
+cannot be estimated well. With the date present, three other adaptation methods
+were tried: target-mean scaling, importance weighting by an estimated density
+ratio, and pseudo-labelling target records into TabFM's context. All landed
 within noise or below. The Bures-Wasserstein map, which is the theoretically
 better-motivated transport, measured worse.
 
 ## Recording date
 
-The largest single effect in this model is not physiology. The label definition
-requires at least six years of clean follow-up for a negative but only one to
-six years to diagnosis for a positive, so negatives are systematically older
-recordings: positives average 2015.2 against 2013.2, with follow-up 2.6 years
-shorter. Recording year alone reaches 0.7103 age-conditioned AUROC. All the
-physiological features together add 0.039 on top of it.
+The largest single effect in the training data is not physiology. The label
+definition requires at least six years of clean follow-up for a negative but
+only one to six years to diagnosis for a positive, so no negative can be recent.
+From 2020 onward the training set holds 38 positives and no negatives, and
+negative recordings are older by a median of 3.3 years. Recording date alone
+reaches 0.723 age-conditioned AUROC across the leave-one-site-out folds, more
+where a site's collection window is short, 0.811 at I0002, which spans 6.7
+years, against 0.660 at S0001, which spans 14.7.
 
-The model also uses the recording's position within its own site's collection
-window, which is worth a further 0.018. The same calendar year sits early in a
-site collecting from 2007 to 2022 and late in one collecting from 2011 to 2020,
-and the artifact runs through position in the window rather than through the
-calendar, so the relative form transfers where the absolute one does not.
+The organizers withheld recording dates from the hidden validation and test
+sets, judging them not to generalise, and rescored every entry without them.
+`_add_date_features` sets both date features to NaN when `CreationTime` is
+missing, and they are then imputed to the training median, so the scored model
+had no date information.
 
-`CreationTime` is supplied for every site including the hidden ones, and the
-same labelling code generates their labels, so the artifact is expected to
-carry. Held out, it does: trained on two sites and scored on the third it
-reaches 0.827, 0.744 and 0.617, tracking each site's prevalence. It is used
-deliberately and reported here rather than relied on quietly. Any claim about
-sleep physiology from this work has to be stated net of it.
+Cross-validated the same way, with the held-out site's dates blanked and
+imputed, the submitted pipeline averages 0.687 (0.701 at I0002, 0.730 at I0006,
+0.629 at S0001) against 0.678 on the hidden test set. With the date available it
+averages 0.786, so the date inflated site-held-out validation by 0.099. Refitted
+without the date, the temporal pooling block adds 0.035 to the tree and the
+TabFM blend a further 0.032.
 
 ## What did not work
 
@@ -122,7 +125,9 @@ Leave-one-site-out over the training sites, plus an inverted fold that trains on
 the dominant site alone. Models are ranked on the mean across adequately
 powered folds rather than the worst fold: a controlled experiment showed the
 worst fold moves by 0.030 under changes carrying no information at all, while
-the mean moves by 0.0014. Every reported figure is the average of three seeds.
+the mean moves by 0.0014. Reported figures are averages of three seeds, except
+those in the Domain adaptation and Recording date sections, which are single
+runs.
 
 The metric keeps only the 11 to 14 percent of pairs that fall within the
 two-year age caliper, and sampled metrics of this kind are known not to
