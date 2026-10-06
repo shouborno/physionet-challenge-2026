@@ -2,14 +2,17 @@
 """
 PhysioNet Challenge 2026: Screening for Cognitive Impairment During Sleep Studies.
 
-Single L2-regularized logistic regression model (28 features) selected via
-greedy forward search optimizing worst-site LOSO AUROC, with a domain-adversarial
-feature stability filter to remove site-confounded and sign-inconsistent features.
+Rank blend of TabFM (weight 0.7) and LightGBM (0.3) on 151 features: 86
+classical PSG summaries (CAISR staging, arousal and respiratory annotations,
+stage transitions, EEG spectral and nonlinear measures, HRV, SpO2,
+demographics), 63 temporal pooling statistics of per-epoch band power, and two
+recording-date features. Training features are aligned to the target site with
+CORAL before both models are refitted. See README.md.
 
-Features span CAISR annotations, sleep architecture transitions, HRV, EEG spectral
-power, slow-wave morphology, spindle density, and nonlinear complexity measures.
-
-LOSO CV: Mean AUROC ~0.780, worst-site ~0.672
+The organizers withheld recording dates from the hidden sets, so the two date
+features were empty, and imputed to the training median, for every scored
+record. Leave-one-site-out age-conditioned AUROC with the held-out site's dates
+blanked the same way: 0.701 / 0.730 / 0.629 (I0002 / I0006 / S0001), mean 0.687.
 """
 
 import joblib
